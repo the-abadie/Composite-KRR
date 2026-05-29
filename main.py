@@ -8,6 +8,13 @@ import preparation
 import preprocess
 from class_CompositeDescriptor import CompositeDescriptor
 from class_Target import Target
+from search_random import (
+    CompositeKRREstimator,
+    plot_random_search_validation_error,
+    staged_random_search_cv,
+)
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.model_selection import KFold
 from utilities import configure_logging
 
 # 0) Initialize
@@ -64,3 +71,67 @@ else:
     idx_train_val, idx_test = preparation.randomized_selection_with_remainder(
         arr=valid_idx, N=N_TRAIN_VAL, rng=rng
     )
+
+# 4) Begin Training
+
+X_train_val = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_train_val)
+y_train_val = target.data[idx_train_val]
+X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
+y_test = target.data[idx_test]
+
+base_estimator = CompositeKRREstimator(
+    names=config.X_NAMES,
+    kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
+    normalizations=config.X_NORMS,
+    normalize_kernel_weights=True,
+)
+estimator = TransformedTargetRegressor(
+    regressor=base_estimator,
+    transformer=preprocess.make_target_preprocessor(config.Y_NORM),
+)
+cv = KFold(n_splits=config.N_KFOLD, shuffle=True, random_state=config.SEED)
+
+scoring = (
+    "neg_root_mean_squared_error"
+    if config.KRR_SCORE_METRIC == "rmse"
+    else config.KRR_SCORE_METRIC
+)
+search_result = staged_random_search_cv(
+    estimator,
+    X_train_val,
+    y_train_val,
+    n_components=DESCRIPTOR_ORDER,
+    alpha_bounds=config.KRR_ALPHA_BOUNDS,
+    gamma_bounds=config.KRR_GAMMA_BOUNDS,
+    n_iter_stage1=config.KRR_RANDOM_SEARCH_STAGE1,
+    n_iter_stage2=config.KRR_RANDOM_SEARCH_STAGE2,
+    n_iter_stage3=config.KRR_RANDOM_SEARCH_STAGE3,
+    scoring=scoring,
+    cv=cv,
+    random_state=config.SEED,
+    n_jobs=config.KRR_RANDOM_SEARCH_N_JOBS,
+    prefix="regressor__",
+    n_trials_bayesian=config.KRR_BAYESIAN_SEARCH_TRIALS,
+    bayesian_timeout=config.KRR_BAYESIAN_SEARCH_TIMEOUT,
+    bayesian_patience=config.KRR_BAYESIAN_SEARCH_PATIENCE,
+)
+
+best_cv_score = search_result.best_score_
+if scoring.startswith("neg_"):
+    best_cv_score = -best_cv_score
+
+logger.warning(f"Best CV {config.KRR_SCORE_METRIC}: {best_cv_score:.6g}")
+logger.info(f"Best hyperparameters: {search_result.best_params_}")
+
+if config.KRR_RANDOM_SEARCH_PLOT_PATH is not None:
+    plot_path = plot_random_search_validation_error(
+        search_result,
+        config.KRR_RANDOM_SEARCH_PLOT_PATH,
+        scoring=scoring,
+    )
+    logger.warning(f"Search validation plot written to {plot_path}")
+
+if len(idx_test) > 0:
+    y_pred = search_result.best_estimator_.predict(X_test)
+    test_rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
+    logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")

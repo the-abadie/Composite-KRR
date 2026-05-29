@@ -72,19 +72,3 @@ def validate_descriptor_target_lengths(descriptors: list, target: ArrayLike) -> 
                 f"does not match the length of the target ({n_targets})."
             )
     logger.info("Validated all descriptor lengths match target length.")
-
-
-def pad_or_trim_last(X, L: int, fill):
-    """
-    Make X[..., :] have length L on the last axis by trimming or zero-padding.
-    Works for (N,B) or any shape ending in B.
-    """
-    X = np.asarray(X, dtype=float)
-    cur = X.shape[-1]
-    if cur == L:
-        return X
-    if cur > L:
-        return X[..., :L]
-
-    pad = [(0, 0)] * (X.ndim - 1) + [(0, L - cur)]
-    return np.pad(X, pad, mode="constant", constant_values=fill)
