@@ -9,7 +9,7 @@ Y_NAME = "my_target"
 Y_NORM = "standard"
 
 N_SAMPLES = 1000
-TRAINING_SPLIT = 0.70
+TRAIN_VAL_SPLIT = 0.70
 N_KFOLD = 5
 STRATIFY = True
 N_STRATA = 5

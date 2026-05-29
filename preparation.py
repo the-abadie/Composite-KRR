@@ -1,6 +1,14 @@
-import random
+import logging
+
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
+
+from config import VERBOSITY
+from utilities import configure_logging
+
+configure_logging(VERBOSITY)
+logger = logging.getLogger("preparation")
+
 
 def randomized_selection_with_remainder(arr, N, rng) -> tuple[NDArray, NDArray]:
     if rng is None:
@@ -15,7 +23,8 @@ def randomized_selection_with_remainder(arr, N, rng) -> tuple[NDArray, NDArray]:
 
     return selected, not_selected
 
-def stratified_selection(target, n_strata:int, n_total:int, rng) -> NDArray:
+
+def stratified_selection(target, n_strata: int, n_total: int, rng) -> NDArray:
     target = np.asarray(target)
     n = target.shape[0]
 
@@ -43,14 +52,29 @@ def stratified_selection(target, n_strata:int, n_total:int, rng) -> NDArray:
         idx = idx[:n_total]
     return idx
 
-def stratified_selection_with_remainder(target, n_strata:int, n_total:int, rng) -> tuple[NDArray, NDArray]:
+
+def stratified_selection_with_remainder(
+    target, n_strata: int, n_total: int, rng
+) -> tuple[NDArray, NDArray]:
     idx = stratified_selection(target, n_strata, n_total, rng=rng)
     mask = np.ones(len(target), dtype=bool)
     mask[idx] = False
     rest = np.where(mask)[0]
     return idx, rest
 
-def pad_or_trim_last(X, L:int, fill):
+
+def validate_descriptor_target_lengths(descriptors: list, target: ArrayLike) -> None:
+    n_targets: int = len(target)
+    for descriptor in descriptors:
+        if descriptor.n_samples != n_targets:
+            raise ValueError(
+                f"Descriptor {descriptor.name} length ({descriptor.n_samples}) "
+                f"does not match the length of the target ({n_targets})."
+            )
+    logger.info("Validated all descriptor lengths match target length.")
+
+
+def pad_or_trim_last(X, L: int, fill):
     """
     Make X[..., :] have length L on the last axis by trimming or zero-padding.
     Works for (N,B) or any shape ending in B.
