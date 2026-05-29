@@ -17,10 +17,11 @@ class Target:
     normalization:str = "standard"
 
     def load_target_from_npy(self) -> np.ndarray:
-        if self.path.suffix != ".npy":
-            raise ValueError(f"Target Path {self.path} is not .npy")
+        path = Path(self.path)
+        if path.suffix != ".npy":
+            raise ValueError(f"Target Path {path} is not .npy")
         y = np.load(self.path)
-        logger.info(f"Target {self.path} successfully loaded.")
+        logger.info(f"Target {self.name} successfully loaded.")
         y = y.reshape(-1)
         return y
 

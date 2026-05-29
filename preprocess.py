@@ -62,12 +62,14 @@ def make_target_preprocesser(transform: str):
 def make_data_preprocessor(transform: str):
     if transform == "none" or transform == "passthrough":
         logger.info("Data Preprocesor: none")
-        return "passthrough"
+        return FunctionTransformer(
+            func=_identity, inverse_func=_identity, validate=False
+        )
     if transform == "standard":
-        logger.info("Data Preprocesor: StandardScaler()")
+        logger.info("Data Preprocesor: StandardScaler")
         return StandardScaler()
     if transform == "log_standard":
-        logger.info("Data Preprocesor: logStandardScaler()")
+        logger.info("Data Preprocesor: logStandardScaler")
         log1p = FunctionTransformer(
             np.log1p,
             feature_names_out="one-to-one",

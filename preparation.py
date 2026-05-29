@@ -1,10 +1,21 @@
 import random
 import numpy as np
+from numpy.typing import NDArray
 
-def randomized_selection(N):
-    pass
+def randomized_selection_with_remainder(arr, N, rng) -> tuple[NDArray, NDArray]:
+    if rng is None:
+        rng = np.random.default_rng()
 
-def stratified_selection(target, n_strata:int, n_total:int, rng):
+    selected_idx = rng.choice(len(arr), size=N, replace=False)
+    mask = np.ones(len(arr), dtype=bool)
+    mask[selected_idx] = False
+
+    selected = arr[selected_idx]
+    not_selected = arr[mask]
+
+    return selected, not_selected
+
+def stratified_selection(target, n_strata:int, n_total:int, rng) -> NDArray:
     target = np.asarray(target)
     n = target.shape[0]
 
@@ -32,7 +43,7 @@ def stratified_selection(target, n_strata:int, n_total:int, rng):
         idx = idx[:n_total]
     return idx
 
-def stratified_selection_with_remainder(target, n_strata:int, n_total:int, rng):
+def stratified_selection_with_remainder(target, n_strata:int, n_total:int, rng) -> tuple[NDArray, NDArray]:
     idx = stratified_selection(target, n_strata, n_total, rng=rng)
     mask = np.ones(len(target), dtype=bool)
     mask[idx] = False
