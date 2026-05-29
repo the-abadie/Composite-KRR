@@ -4,11 +4,9 @@ import random
 import numpy as np
 
 import config
-import kfold
 import preparation
 import preprocess
 from class_CompositeDescriptor import CompositeDescriptor
-from class_CompositeKRR import staged_randomized_search_cv
 from class_Target import Target
 from utilities import configure_logging
 
@@ -66,12 +64,3 @@ else:
     idx_train_val, idx_test = preparation.randomized_selection_with_remainder(
         arr=valid_idx, N=N_TRAIN_VAL, rng=rng
     )
-
-# 4) Prepare CV Splits
-kf = kfold.initialize_kfold(n_splits=config.N_KFOLD, shuffle=False, seed=config.SEED)
-
-X_train_val = preprocess.descriptor_blocks_to_sample_matrix(
-    descriptors=descriptors,
-    indices=idx_train_val,
-)
-y_train_val = target.data[idx_train_val]
