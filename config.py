@@ -1,0 +1,3 @@
+PREPROCESSOR = "standard"
+TARGET_TRANSFORM = "standard"
+VERBOSITY = 2
