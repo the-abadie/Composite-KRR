@@ -1,15 +1,7 @@
-class CompositeKRR:
-    def __init__(
-        self,
-        alpha: float,
-        kernel: str,
-        gamma: float | list[float],
-        kernel_weights: list[float],
-    ):
-        pass
+import logging
 
-    def fit(self):
-        pass
+from config import VERBOSITY
+from utilities import configure_logging
 
-    def predict(self):
-        pass
+configure_logging(VERBOSITY)
+logger = logging.getLogger("class_CompositeKRR")

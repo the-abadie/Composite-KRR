@@ -103,3 +103,22 @@ def transform_descriptors_for_split(descriptors:CompositeDescriptor, train_idx, 
         preprocessors.append(transformer)
 
     return X_train_blocks, X_eval_blocks, preprocessors
+
+
+def descriptor_blocks_to_sample_matrix(
+    descriptors: CompositeDescriptor, indices=None
+) -> np.ndarray:
+    if not descriptors.blocks:
+        raise ValueError("Descriptor blocks have not been loaded.")
+
+    if indices is None:
+        indices = np.arange(descriptors.blocks[0].n_samples)
+    indices = np.asarray(indices, dtype=int)
+
+    X = np.empty((len(indices), len(descriptors.blocks)), dtype=object)
+    for block_idx, descriptor in enumerate(descriptors.blocks):
+        values = descriptor.values[indices]
+        for sample_idx, value in enumerate(values):
+            X[sample_idx, block_idx] = value
+
+    return X
