@@ -12,7 +12,7 @@ from class_Target import Target
 from postprocess import plot_random_search_validation_error, runtime_analysis
 from search_random import CompositeKRREstimator, staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
 from time import perf_counter
 from config_validation import validate_config
@@ -92,30 +92,36 @@ if not config.USE_PREDEFINED_SPLITS:
 
     else:
         idx_train_val, idx_test = preparation.randomized_selection_with_remainder(
-            arr=valid_idx, N=N_TRAIN_VAL, rng=rng
-        )
+            arr=valid_idx, N=N_TRAIN_VAL, rng=rng)
+
+    cv = KFold(n_splits=config.N_KFOLD, shuffle=True, random_state=config.SEED)
+
 else: # Using pre-defined splits. Separate config validation.
-    predef_idx_train:NDArray = np.load(config.PREDEF_TRAINING_IDX_PATH)
-    predef_idx_val  :NDArray = np.load(config.PREDEF_VAL_KFOLD_IDX_PATH)
-    predef_idx_test :NDArray = np.load(config.PREDEF_TESTING_IDX_PATH)
+    predef_idx_train: NDArray = np.asarray(np.load(config.PREDEF_TRAINING_IDX_PATH))
+    predef_idx_val: list[NDArray] = preparation.load_predefined_validation_folds(
+        config.PREDEF_VAL_KFOLD_IDX_PATH
+    )
+    predef_idx_test: NDArray = np.asarray(np.load(config.PREDEF_TESTING_IDX_PATH))
 
-    N_PREDEF_TRAIN = len(predef_idx_train)
-    N_PREDEF_VAL   = len(predef_idx_val.flatten())
-    N_PREDEF_TEST  = len(predef_idx_test)
+    preparation.validate_predefined_splits(
+        predef_idx_train,
+        predef_idx_val,
+        predef_idx_test,
+        TARGET_LENGTH,
+    )
 
-    if N_PREDEF_TRAIN + N_PREDEF_VAL + N_PREDEF_TEST > TARGET_LENGTH:
-        raise ValueError("Number of pre-defined indices is greater than the target length. Please check your splits.")
-
-    if config.N_SAMPLES is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `N_SAMPLES` is not `None`. Config value will be ignored.")
-    if config.TRAIN_VAL_SPLIT is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `TRAIN_VAL_SPLIT` is not `None`. Config value will be ignored." )
-    if config.N_KFOLD is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `N_KFOLD` is not `None`. Config value will be ignored." )
-    if config.STRATIFY:
-        logger.warning(f"WARNING: You are using pre-defined splits but `STRATIFY` is not `False`. Config value will be ignored.")
-
+    idx_train_val = np.concatenate([predef_idx_train, *predef_idx_val])
     idx_test = predef_idx_test
+
+    test_fold = np.full(len(idx_train_val), -1, dtype=int)
+    offset = len(predef_idx_train)
+
+    for fold_id, fold_val_idx in enumerate(predef_idx_val):
+        n_val = len(fold_val_idx)
+        test_fold[offset : offset + n_val] = fold_id
+        offset += n_val
+
+    cv = PredefinedSplit(test_fold=test_fold)
 
 time_end_prepare_splits:float = perf_counter()
 
@@ -124,7 +130,6 @@ time_log.info(f"Splits prepared in "
 
 # 4) Begin Training
 time_start_training:float = perf_counter()
-cv = KFold(n_splits=config.N_KFOLD, shuffle=True, random_state=config.SEED)
 
 X_train_val = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_train_val)
 y_train_val = target_data[idx_train_val]
