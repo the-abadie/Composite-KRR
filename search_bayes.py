@@ -4,6 +4,7 @@ import logging
 import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
+from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
 
@@ -133,7 +134,7 @@ def fit_bayesian_search(
         best_estimator_=best_estimator,
         best_params_=_prefix_params(best_params, prefix),
         best_score_=float(study.best_value),
-        search_history_=_bayesian_search_history(study, scoring=scoring),
+        search_history_=bayesian_search_history(study, scoring=scoring),
     )
 
 
@@ -250,45 +251,6 @@ def _validate_kernel_weight_bounds(bounds: tuple[float, float]) -> None:
             "Expected 0 <= low < high for kernel_weight_bounds, "
             f"got {bounds}."
         )
-
-
-def _bayesian_search_history(study, *, scoring) -> list[dict]:
-    best_score = -np.inf
-    best_validation_error = np.inf
-    history = []
-
-    for trial in study.trials:
-        if trial.value is None:
-            continue
-
-        mean_test_score = float(trial.value)
-        validation_error = _validation_error_from_score(mean_test_score, scoring)
-        improved = mean_test_score > best_score
-
-        if improved:
-            best_score = mean_test_score
-            best_validation_error = validation_error
-
-        history.append(
-            {
-                "iteration": len(history) + 1,
-                "mean_test_score": mean_test_score,
-                "std_test_score": np.nan,
-                "validation_error": validation_error,
-                "best_mean_test_score": best_score,
-                "best_validation_error": best_validation_error,
-                "improved": improved,
-                "params": dict(trial.params),
-            }
-        )
-
-    return history
-
-
-def _validation_error_from_score(score: float, scoring) -> float:
-    if isinstance(scoring, str) and scoring.startswith("neg_"):
-        return -score
-    return score
 
 
 def _progress_milestones(n_trials: int) -> set[int]:

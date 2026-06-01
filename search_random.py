@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import logging
-from utilities import configure_logging
+from utilities import configure_logging, time_dif
 from config import VERBOSITY
 from scipy.stats import loguniform, uniform
 from sklearn.base import BaseEstimator, RegressorMixin, clone
@@ -11,12 +11,19 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.utils.validation import check_is_fitted
 
 from class_CompositeKRR import CompositeKRR, KernelComponent
+from postprocess import (
+    attach_random_search_history,
+    combined_random_search_history,
+    log_random_search_improvements,
+    offset_bayesian_search_history,
+)
 from preprocess import make_data_preprocessor
 from search_bayes import BayesianSearchResult, fit_bayesian_search
 
 configure_logging(VERBOSITY)
 logger = logging.getLogger("search")
 
+time_log = logging.getLogger("timing")
 
 class LogUniformList:
     def __init__(self, low: float, high: float, size: int):
@@ -92,7 +99,7 @@ class StagedRandomSearchResult:
 
     @property
     def random_search_history_(self) -> list[dict]:
-        return _combined_random_search_history(self.stages)
+        return combined_random_search_history(self.stages)
 
     @property
     def random_search_improvements_(self) -> list[dict]:
@@ -107,7 +114,7 @@ class StagedRandomSearchResult:
         if self.bayesian_stage is None:
             return []
 
-        return _offset_bayesian_search_history(
+        return offset_bayesian_search_history(
             self.bayesian_stage.search_history_,
             iteration_offset=len(self.random_search_history_),
         )
@@ -333,93 +340,6 @@ def make_stage_param_distributions(
     raise ValueError(f"stage must be 1, 2, or 3, got {stage}.")
 
 
-def plot_random_search_validation_error(
-    search_result: StagedRandomSearchResult,
-    output_path: str | Path,
-    *,
-    scoring: str | None = None,
-) -> Path:
-    history = search_result.random_search_history_
-    if not history:
-        raise ValueError("No random search history is available to plot.")
-    bayesian_history = search_result.bayesian_search_history_
-    plot_history = history + bayesian_history
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    improvements = [
-        record
-        for record in history
-        if record["improved"] and np.isfinite(record["best_validation_error"])
-    ]
-    if not improvements:
-        raise ValueError("No random search improvements are available to plot.")
-
-    iterations = [record["iteration"] for record in improvements]
-    best_validation_errors = [
-        record["best_validation_error"] for record in improvements
-    ]
-    random_line_iterations = list(iterations)
-    random_line_errors = list(best_validation_errors)
-    if random_line_iterations[-1] != history[-1]["iteration"]:
-        random_line_iterations.append(history[-1]["iteration"])
-        random_line_errors.append(history[-1]["best_validation_error"])
-    y_label = _validation_metric_label(scoring)
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    random_line = ax.plot(
-        random_line_iterations,
-        random_line_errors,
-        linewidth=2,
-        label=f"Best {y_label.lower()}",
-    )[0]
-    ax.scatter(
-        iterations,
-        best_validation_errors,
-        s=42,
-        color=random_line.get_color(),
-        zorder=3,
-    )
-
-    if bayesian_history:
-        bayesian_iterations = [history[-1]["iteration"]]
-        bayesian_validation_errors = [history[-1]["best_validation_error"]]
-        bayesian_iterations.extend(
-            record["iteration"] for record in bayesian_history
-        )
-        bayesian_validation_errors.extend(
-            record["validation_error"] for record in bayesian_history
-        )
-        ax.plot(
-            bayesian_iterations,
-            bayesian_validation_errors,
-            marker="o",
-            markersize=3,
-            linewidth=1,
-            alpha=0.75,
-            label="Bayesian validation error",
-        )
-
-    ax.set_xlim(0.5, plot_history[-1]["iteration"] + 0.5)
-    _annotate_stage_boundaries(ax, plot_history)
-    ax.set_title("Search Validation Error")
-    ax.set_xlabel("Search iteration")
-    ax.set_ylabel(y_label)
-    ax.grid(True, alpha=0.25)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=160)
-    plt.close(fig)
-
-    return output_path
-
-
 def staged_random_search_cv(
     estimator,
     X,
@@ -468,6 +388,7 @@ def staged_random_search_cv(
         kernel_weights=[1.0] if n_components == 1 else None,
     )
     logger.warning(f"Beginning Stage 1 search in joint alpha/kernel_weight space. [{n_iter_stage1} iterations]")
+    time_stage1_start:float = perf_counter()
     stage1 = _fit_random_search(
         stage1_estimator,
         X,
@@ -488,7 +409,8 @@ def staged_random_search_cv(
         refit=refit,
         stage_name="Stage 1",
     )
-
+    time_stage1_end:float = perf_counter()
+    time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
     stage1_weights = (
         [1.0]
         if n_components == 1
@@ -501,6 +423,7 @@ def staged_random_search_cv(
         kernel_weights=stage1_weights,
     )
     logger.warning(f"Beginning Stage 2 search in joint alpha/gamma space. [{n_iter_stage2} iterations]")
+    time_stage2_start:float = perf_counter()
     stage2 = _fit_random_search(
         stage2_estimator,
         X,
@@ -521,6 +444,8 @@ def staged_random_search_cv(
         refit=refit,
         stage_name="Stage 2",
     )
+    time_stage2_end:float = perf_counter()
+    time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
 
     stage3_estimator = _clone_with_params(
         estimator,
@@ -529,6 +454,7 @@ def staged_random_search_cv(
         kernel_weights=[1.0] if n_components == 1 else None,
     )
     logger.warning(f"Beginning Stage 3 search in joint gamma/kernel_weight space. [{n_iter_stage3} iterations]")
+    time_stage3_start:float = perf_counter()
     stage3 = _fit_random_search(
         stage3_estimator,
         X,
@@ -549,6 +475,8 @@ def staged_random_search_cv(
         refit=refit,
         stage_name="Stage 3",
     )
+    time_stage3_end:float = perf_counter()
+    time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
 
     final_params = {
         f"{prefix}alpha": _best_param(stage2, prefix, "alpha"),
@@ -565,12 +493,12 @@ def staged_random_search_cv(
         stage3=stage3,
         final_params=final_params,
     )
-    _log_random_search_improvements(random_result, scoring=scoring)
+    log_random_search_improvements(random_result, scoring=scoring, logger=logger)
 
     bayesian_stage = None
     if n_trials_bayesian is not None and n_trials_bayesian > 0:
         logger.warning(f"Now entering final stage: Bayesian search over all hyperparameters [{n_trials_bayesian} iterations]")
-
+        time_bayes_start:float = perf_counter()
         bayesian_stage = fit_bayesian_search(
             estimator,
             X,
@@ -590,6 +518,8 @@ def staged_random_search_cv(
             prefix=prefix,
             stage_name="Bayesian search",
         )
+        time_bayes_end:float = perf_counter()
+        time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
 
     return StagedRandomSearchResult(
         stage1=stage1,
@@ -629,7 +559,7 @@ def _fit_random_search(
     )
     search.stage_name = stage_name
     search.fit(X, y)
-    _attach_random_search_history(search, scoring=scoring)
+    attach_random_search_history(search, scoring=scoring)
     return search
 
 
@@ -647,156 +577,3 @@ def _clone_with_params(estimator, *, prefix: str, **params):
 
 def _best_param(search: RandomizedSearchCV, prefix: str, name: str):
     return search.best_params_[f"{prefix}{name}"]
-
-
-def _attach_random_search_history(search: RandomizedSearchCV, *, scoring) -> None:
-    cv_results = search.cv_results_
-    best_score = -np.inf
-    best_validation_error = np.inf
-    history = []
-    improvements = []
-
-    for index, params in enumerate(cv_results["params"], start=1):
-        result_index = index - 1
-        mean_test_score = float(cv_results["mean_test_score"][result_index])
-        std_test_score = float(cv_results["std_test_score"][result_index])
-        validation_error = _validation_error_from_score(mean_test_score, scoring)
-        improved = mean_test_score > best_score
-
-        if improved:
-            best_score = mean_test_score
-            best_validation_error = validation_error
-
-        record = {
-            "iteration": index,
-            "mean_test_score": mean_test_score,
-            "std_test_score": std_test_score,
-            "validation_error": validation_error,
-            "best_mean_test_score": best_score,
-            "best_validation_error": best_validation_error,
-            "improved": improved,
-            "params": params,
-        }
-        history.append(record)
-
-        if improved:
-            improvements.append(record)
-
-    search.search_history_ = history
-    search.improvement_history_ = improvements
-
-
-def _combined_random_search_history(stages) -> list[dict]:
-    combined = []
-    iteration_offset = 0
-
-    for stage_index, search in enumerate(stages, start=1):
-        stage_name = getattr(search, "stage_name", f"Stage {stage_index}")
-        history = getattr(search, "search_history_", [])
-
-        for record in history:
-            stage_iteration = record["iteration"]
-            combined_record = dict(record)
-            combined_record["stage_improved"] = combined_record["improved"]
-            combined_record["stage"] = stage_name
-            combined_record["stage_iteration"] = stage_iteration
-            combined_record["iteration"] = iteration_offset + stage_iteration
-            combined.append(combined_record)
-
-        iteration_offset += len(history)
-
-    best_score = -np.inf
-    best_validation_error = np.inf
-    for record in combined:
-        improved = record["mean_test_score"] > best_score
-        if improved:
-            best_score = record["mean_test_score"]
-            best_validation_error = record["validation_error"]
-
-        record["improved"] = improved
-        record["best_mean_test_score"] = best_score
-        record["best_validation_error"] = best_validation_error
-
-    return combined
-
-
-def _offset_bayesian_search_history(
-    history: list[dict],
-    *,
-    iteration_offset: int,
-) -> list[dict]:
-    offset_history = []
-
-    for record in history:
-        stage_iteration = record["iteration"]
-        offset_record = dict(record)
-        offset_record["stage"] = "Bayesian"
-        offset_record["stage_iteration"] = stage_iteration
-        offset_record["iteration"] = iteration_offset + stage_iteration
-        offset_history.append(offset_record)
-
-    return offset_history
-
-
-def _log_random_search_improvements(
-    search_result: StagedRandomSearchResult,
-    *,
-    scoring,
-) -> None:
-    metric_label = _validation_metric_label(scoring).lower()
-    for record in search_result.random_search_improvements_:
-        logger.debug(
-            "Random search improved at iteration "
-            f"{record['iteration']} ({record['stage']} iteration "
-            f"{record['stage_iteration']}): best {metric_label} "
-            f"{record['best_validation_error']:.6g} "
-            f"(score {record['best_mean_test_score']:.6g})"
-        )
-
-
-def _annotate_stage_boundaries(ax, history: list[dict]) -> None:
-    current_stage = history[0]["stage"]
-    stage_start = history[0]["iteration"]
-
-    for previous, current in zip(history, history[1:]):
-        if current["stage"] == current_stage:
-            continue
-
-        stage_end = previous["iteration"]
-        boundary = stage_end + 0.5
-        ax.axvline(boundary, color="0.45", linestyle="--", linewidth=1, alpha=0.6)
-        _add_stage_label(ax, current_stage, stage_start, stage_end)
-
-        current_stage = current["stage"]
-        stage_start = current["iteration"]
-
-    _add_stage_label(ax, current_stage, stage_start, history[-1]["iteration"])
-
-
-def _add_stage_label(ax, stage_name: str, start: int, end: int) -> None:
-    ax.text(
-        (start + end) / 2,
-        0.98,
-        stage_name,
-        transform=ax.get_xaxis_transform(),
-        ha="center",
-        va="top",
-        fontsize=9,
-        color="0.25",
-    )
-
-
-def _validation_error_from_score(score: float, scoring) -> float:
-    if _is_negative_error_scorer(scoring):
-        return -score
-    return score
-
-
-def _validation_metric_label(scoring) -> str:
-    if _is_negative_error_scorer(scoring):
-        return "Validation error"
-    return "Validation score"
-
-
-def _is_negative_error_scorer(scoring) -> bool:
-    return isinstance(scoring, str) and scoring.startswith("neg_")

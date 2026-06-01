@@ -1,5 +1,5 @@
 SEED = 1
-VERBOSITY = 0
+VERBOSITY = 1
 
 X_PATHS = ["sample/desc1.npy", "sample/desc2.npy", "sample/desc3.npy"]
 X_NAMES = ["desc1", "desc2", "desc3"]

@@ -14,8 +14,8 @@ logger = logging.getLogger("class_Target")
 class Target:
     name:str
     path:Path
-    normalization:str = "standard"
-    data: NDArray | None = field(default=None, init=False, repr=False)
+    normalization:str
+    data: NDArray | None = None
 
     @property
     def n_samples(self) -> int:

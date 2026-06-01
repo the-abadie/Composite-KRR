@@ -63,7 +63,7 @@ def stratified_selection_with_remainder(
     return idx, rest
 
 
-def validate_descriptor_target_lengths(descriptors: list, target: ArrayLike) -> None:
+def validate_descriptor_target_lengths(descriptors: list, target: NDArray) -> None:
     n_targets: int = len(target)
     for descriptor in descriptors:
         if descriptor.n_samples != n_targets:
