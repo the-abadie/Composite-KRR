@@ -7,3 +7,4 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Supports K-Fold CV and target-stratification
 - Easy to add multiple descriptors and kernels
 - Multi-target learning planned.
+- Config validation

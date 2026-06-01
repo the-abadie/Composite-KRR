@@ -67,7 +67,7 @@ def make_data_preprocessor(transform: str):
             func=_identity, inverse_func=_identity, validate=False
         )
     if transform == "standard":
-        logger.debug("Data Preprocesor: StandardScaler")
+        # logger.debug("Data Preprocesor: StandardScaler")
         return StandardScaler()
     if transform == "log_standard":
         logger.debug("Data Preprocesor: logStandardScaler")

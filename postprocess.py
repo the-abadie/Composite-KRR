@@ -278,7 +278,7 @@ def _is_negative_error_scorer(scoring) -> bool:
     return isinstance(scoring, str) and scoring.startswith("neg_")
 
 
-def time_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
+def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
     dts = []
     for segment in start_end_list:
         dts.append(segment[1] - segment[0])
