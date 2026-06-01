@@ -10,6 +10,8 @@ Y_NAME = "my_target"
 Y_NORM = "standard"
 
 N_SAMPLES = 1000
+USE_PREDEFINED_SPLITS = False
+
 TRAIN_VAL_SPLIT = 0.70
 N_KFOLD = 5
 STRATIFY = True
@@ -21,6 +23,7 @@ KRR_GAMMA_BOUNDS = (1e-6, 1e2)
 KRR_RANDOM_SEARCH_STAGE1 = 25
 KRR_RANDOM_SEARCH_STAGE2 = 25
 KRR_RANDOM_SEARCH_STAGE3 = 25
+
 # None follows sklearn's default; -1 uses all available cores.
 KRR_RANDOM_SEARCH_N_JOBS = None
 KRR_RANDOM_SEARCH_PLOT_PATH = "random_search_validation_error.png"

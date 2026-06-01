@@ -1,5 +1,5 @@
 import logging
-
+from config import VERBOSITY
 
 def configure_logging(verbosity: int) -> None:
     if verbosity <= 0:

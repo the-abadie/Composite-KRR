@@ -2,7 +2,12 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.model_selection import RandomizedSearchCV
+from utilities import configure_logging
+from config import VERBOSITY
+import logging
 
+configure_logging(VERBOSITY)
+logger = logging.getLogger("post-processing")
 
 def attach_random_search_history(search: RandomizedSearchCV, *, scoring) -> None:
     cv_results = search.cv_results_
@@ -271,3 +276,16 @@ def _add_stage_label(ax, stage_name: str, start: int, end: int) -> None:
 
 def _is_negative_error_scorer(scoring) -> bool:
     return isinstance(scoring, str) and scoring.startswith("neg_")
+
+
+def time_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
+    dts = []
+    for segment in start_end_list:
+        dts.append(segment[1] - segment[0])
+
+    total_time:float = sum(dts)
+    percents = [100*dt/total_time for dt in dts]
+
+    logger.warning("RUNTIME BREAKDOWN")
+    for i in range(len(start_end_list)):
+        logger.warning(f"{percents[i]:05.2f}%: {start_end_list[i][2]}")

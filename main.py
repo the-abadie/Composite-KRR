@@ -8,7 +8,7 @@ import preparation
 import preprocess
 from class_CompositeDescriptor import CompositeDescriptor
 from class_Target import Target
-from postprocess import plot_random_search_validation_error
+from postprocess import plot_random_search_validation_error, time_analysis
 from search_random import CompositeKRREstimator, staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold
@@ -169,3 +169,16 @@ time_log.info(f"Post-processing completed in "
 
 time_f:float = perf_counter()
 time_log.warning(f"CKRR learning stack completed in {time_dif(time_0, time_f)}.")
+
+training_timings = search_result.timings
+
+time_analysis([
+    (time_start_prepare_descriptor, time_end_prepare_descriptor, "Descriptor Preparation"),
+    (time_start_prepare_target, time_end_prepare_target, "Target Preparation"),
+    (time_start_prepare_splits, time_end_prepare_splits, "Split Preparation"),
+    training_timings[0], # Training Stage 1
+    training_timings[1], # Training Stage 2
+    training_timings[2], # Training Stage 3
+    training_timings[3], # Training Stage 4 (Optional)
+    (time_start_postprocessing, time_end_postprocessing, "Post-Processing")
+])

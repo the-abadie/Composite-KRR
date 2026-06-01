@@ -69,6 +69,7 @@ class StagedRandomSearchResult:
     stage2: RandomizedSearchCV
     stage3: RandomizedSearchCV
     final_params: dict
+    timings: list[tuple[float, float, str]]
     bayesian_stage: BayesianSearchResult | None = None
 
     @property
@@ -487,11 +488,20 @@ def staged_random_search_cv(
             else _best_param(stage3, prefix, "kernel_weights")
         ),
     }
+
+    timings = [
+        (time_stage1_start, time_stage1_end, "Training: Stage I"),
+        (time_stage2_start, time_stage2_end, "Training: Stage II"),
+        (time_stage3_start, time_stage3_end, "Training: Stage III"),
+        (0., 0., "Training: Stage IV (Skipped)"),
+    ]
+
     random_result = StagedRandomSearchResult(
         stage1=stage1,
         stage2=stage2,
         stage3=stage3,
         final_params=final_params,
+        timings=timings
     )
     log_random_search_improvements(random_result, scoring=scoring, logger=logger)
 
@@ -521,12 +531,20 @@ def staged_random_search_cv(
         time_bayes_end:float = perf_counter()
         time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
 
+        timings = [
+            (time_stage1_start, time_stage1_end, "Training: Stage I"),
+            (time_stage2_start, time_stage2_end, "Training: Stage II"),
+            (time_stage3_start, time_stage3_end, "Training: Stage III"),
+            (time_bayes_start , time_bayes_end , "Training: Stage IV"),
+        ]
+
     return StagedRandomSearchResult(
         stage1=stage1,
         stage2=stage2,
         stage3=stage3,
         final_params=final_params,
         bayesian_stage=bayesian_stage,
+        timings=timings
     )
 
 
