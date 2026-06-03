@@ -141,6 +141,7 @@ base_estimator = CompositeKRREstimator(
     kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
     normalizations=config.X_NORMS,
     normalize_kernel_weights=True,
+    compute_dtype=config.KRR_COMPUTE_DTYPE,
 )
 estimator = TransformedTargetRegressor(
     regressor=base_estimator,
@@ -170,6 +171,11 @@ search_result = staged_random_search_cv(
     n_trials_bayesian=config.KRR_BAYESIAN_SEARCH_TRIALS,
     bayesian_timeout=config.KRR_BAYESIAN_SEARCH_TIMEOUT,
     bayesian_patience=config.KRR_BAYESIAN_SEARCH_PATIENCE,
+    use_distance_cache=config.KRR_USE_DISTANCE_CACHE,
+    distance_block_size=config.KRR_DISTANCE_BLOCK_SIZE,
+    distance_dtype=config.KRR_COMPUTE_DTYPE,
+    distance_cache_n_jobs=config.KRR_DISTANCE_CACHE_N_JOBS,
+    distance_cache_memory_fraction=config.KRR_DISTANCE_CACHE_MEMORY_FRACTION,
 )
 time_end_training:float = perf_counter()
 
@@ -211,9 +217,6 @@ postprocess.runtime_analysis([
     (time_start_prepare_descriptor, time_end_prepare_descriptor, "Descriptor Preparation"),
     (time_start_prepare_target, time_end_prepare_target, "Target Preparation"),
     (time_start_prepare_splits, time_end_prepare_splits, "Split Preparation"),
-    training_timings[0], # Training Stage 1
-    training_timings[1], # Training Stage 2
-    training_timings[2], # Training Stage 3
-    training_timings[3], # Training Stage 4 (Optional)
+    *training_timings,
     (time_start_postprocessing, time_end_postprocessing, "Post-Processing")
 ])

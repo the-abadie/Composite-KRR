@@ -2,8 +2,10 @@ from dataclasses import dataclass
 
 import logging
 import numpy as np
+from numpy.linalg import LinAlgError
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
+from kernel_cache import cached_cross_val_scores
 from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
@@ -47,6 +49,7 @@ def fit_bayesian_search(
     n_trials: int,
     prefix: str,
     stage_name: str = "Bayesian search",
+    distance_cache=None,
 ) -> BayesianSearchResult:
     if optuna is None:
         raise ImportError("Optuna is required for the optional Bayesian stage.")
@@ -80,16 +83,29 @@ def fit_bayesian_search(
             gamma_bounds=gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
         )
-        candidate = _clone_with_params(estimator, prefix=prefix, **params)
-        scores = cross_val_score(
-            candidate,
-            X,
-            y,
-            scoring=scoring,
-            cv=cv,
-            n_jobs=n_jobs,
-            error_score="raise",
-        )
+        if distance_cache is None:
+            candidate = _clone_with_params(estimator, prefix=prefix, **params)
+            scores = cross_val_score(
+                candidate,
+                X,
+                y,
+                scoring=scoring,
+                cv=cv,
+                n_jobs=n_jobs,
+                error_score="raise",
+            )
+        else:
+            try:
+                scores = cached_cross_val_scores(
+                    estimator,
+                    _prefix_params(params, prefix),
+                    distance_cache,
+                    scoring=scoring,
+                )
+            except LinAlgError:
+                return -np.inf
+            if not np.all(np.isfinite(scores)):
+                return -np.inf
         return float(np.mean(scores))
 
     milestones = _progress_milestones(n_trials)

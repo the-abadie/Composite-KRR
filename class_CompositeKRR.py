@@ -36,15 +36,21 @@ class CompositeKRR:
     alpha: float
     components: list[KernelComponent]
 
-    def __init__(self, components: list[KernelComponent], alpha: float):
+    def __init__(
+        self,
+        components: list[KernelComponent],
+        alpha: float,
+        dtype: np.dtype | type | str = np.float64,
+    ):
         if alpha <= 0:
             raise ValueError(f"alpha must be positive, got {alpha}.")
 
         self.components = list(components) if components is not None else []
         self.alpha = alpha
+        self.dtype = np.dtype(dtype)
 
     def fit(self, X_blocks: list[NDArray], y: ArrayLike):
-        y = np.asarray(y, dtype=float).reshape(-1)
+        y = np.asarray(y, dtype=self.dtype).reshape(-1)
         n_samples = y.shape[0]
         if n_samples == 0:
             raise ValueError("Cannot fit CompositeKRR with zero samples.")
@@ -87,7 +93,7 @@ class CompositeKRR:
         expected_n_samples = n_samples
 
         for component, X in zip(self.components, X_blocks):
-            X = np.asarray(X, dtype=float)
+            X = np.asarray(X, dtype=self.dtype)
             if X.ndim == 0:
                 raise ValueError(
                     f"Descriptor block {component.name} must have a sample axis."
@@ -128,7 +134,9 @@ class CompositeKRR:
                 filter_params=True,
                 gamma=component.gamma,
             )
-            weighted_K = component.kernel_weight * K
+            K = np.asarray(K, dtype=self.dtype)
+            weighted_K = K
+            weighted_K *= component.kernel_weight
 
             if K_total is None:
                 K_total = weighted_K

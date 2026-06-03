@@ -1,4 +1,5 @@
 import config
+import numpy as np
 
 def validate_config() -> None:
     """
@@ -16,3 +17,37 @@ def validate_config() -> None:
     #         "`VERBOSITY` must be in {0, 1, 2} for increasing verbosity of logs "
     #         "or of type `None` for the verbosity to be set to 1."
     #     )
+
+    if not isinstance(config.KRR_USE_DISTANCE_CACHE, bool):
+        raise ValueError("`KRR_USE_DISTANCE_CACHE` must be a bool.")
+
+    if (
+        type(config.KRR_DISTANCE_BLOCK_SIZE) is not int
+        or config.KRR_DISTANCE_BLOCK_SIZE <= 0
+    ):
+        raise ValueError("`KRR_DISTANCE_BLOCK_SIZE` must be a positive int.")
+
+    try:
+        np.dtype(config.KRR_COMPUTE_DTYPE)
+    except TypeError as exc:
+        raise ValueError("`KRR_COMPUTE_DTYPE` must be a valid NumPy dtype.") from exc
+
+    if not np.issubdtype(np.dtype(config.KRR_COMPUTE_DTYPE), np.floating):
+        raise ValueError("`KRR_COMPUTE_DTYPE` must be a floating NumPy dtype.")
+
+    if (
+        config.KRR_DISTANCE_CACHE_N_JOBS is not None
+        and (
+            type(config.KRR_DISTANCE_CACHE_N_JOBS) is not int
+            or config.KRR_DISTANCE_CACHE_N_JOBS == 0
+        )
+    ):
+        raise ValueError("`KRR_DISTANCE_CACHE_N_JOBS` must be `None` or a non-zero int.")
+
+    if not (
+        isinstance(config.KRR_DISTANCE_CACHE_MEMORY_FRACTION, float)
+        or isinstance(config.KRR_DISTANCE_CACHE_MEMORY_FRACTION, int)
+    ):
+        raise ValueError("`KRR_DISTANCE_CACHE_MEMORY_FRACTION` must be numeric.")
+    if not 0 < config.KRR_DISTANCE_CACHE_MEMORY_FRACTION <= 1:
+        raise ValueError("`KRR_DISTANCE_CACHE_MEMORY_FRACTION` must be in (0, 1].")
