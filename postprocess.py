@@ -145,10 +145,70 @@ def log_random_search_improvements(search_result, *, scoring, logger) -> None:
             f"(score {record['best_mean_test_score']:.6g})"
         )
 
+def validation_error_from_score(score: float, scoring) -> float:
+    if _is_negative_error_scorer(scoring):
+        return -score
+    return score
+
+
+def validation_metric_label(scoring) -> str:
+    if _is_negative_error_scorer(scoring):
+        return "Validation error"
+    return "Validation score"
+
+
+def _annotate_stage_boundaries(ax, history: list[dict]) -> None:
+    current_stage = history[0]["stage"]
+    stage_start = history[0]["iteration"]
+
+    for previous, current in zip(history, history[1:]):
+        if current["stage"] == current_stage:
+            continue
+
+        stage_end = previous["iteration"]
+        boundary = stage_end + 0.5
+        ax.axvline(boundary, color="0.45", linestyle="--", linewidth=1, alpha=0.6)
+        _add_stage_label(ax, current_stage, stage_start, stage_end)
+
+        current_stage = current["stage"]
+        stage_start = current["iteration"]
+
+    _add_stage_label(ax, current_stage, stage_start, history[-1]["iteration"])
+
+
+def _add_stage_label(ax, stage_name: str, start: int, end: int) -> None:
+    ax.text(
+        (start + end) / 2,
+        0.98,
+        stage_name,
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="top",
+        fontsize=9,
+        color="0.25",
+    )
+
+
+def _is_negative_error_scorer(scoring) -> bool:
+    return isinstance(scoring, str) and scoring.startswith("neg_")
+
+
+def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
+    dts = []
+    for segment in start_end_list:
+        dts.append(segment[1] - segment[0])
+
+    total_time:float = sum(dts)
+    percents = [100*dt/total_time for dt in dts]
+
+    logger.warning("RUNTIME BREAKDOWN")
+    for i in range(len(start_end_list)):
+        logger.warning(f"{percents[i]:05.2f}%: {start_end_list[i][2]}")
+
 
 def plot_random_search_validation_error(
     search_result,
-    *,
+    OUTPUT_DIR:str,
     scoring: str | None = None,
 ):
     history = search_result.random_search_history_
@@ -223,72 +283,11 @@ def plot_random_search_validation_error(
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
-    fig.savefig("plot-loss.png", dpi=300)
+    fig.savefig(f"{OUTPUT_DIR}/plot-loss.png", dpi=300)
     plt.close(fig)
 
 
-def validation_error_from_score(score: float, scoring) -> float:
-    if _is_negative_error_scorer(scoring):
-        return -score
-    return score
-
-
-def validation_metric_label(scoring) -> str:
-    if _is_negative_error_scorer(scoring):
-        return "Validation error"
-    return "Validation score"
-
-
-def _annotate_stage_boundaries(ax, history: list[dict]) -> None:
-    current_stage = history[0]["stage"]
-    stage_start = history[0]["iteration"]
-
-    for previous, current in zip(history, history[1:]):
-        if current["stage"] == current_stage:
-            continue
-
-        stage_end = previous["iteration"]
-        boundary = stage_end + 0.5
-        ax.axvline(boundary, color="0.45", linestyle="--", linewidth=1, alpha=0.6)
-        _add_stage_label(ax, current_stage, stage_start, stage_end)
-
-        current_stage = current["stage"]
-        stage_start = current["iteration"]
-
-    _add_stage_label(ax, current_stage, stage_start, history[-1]["iteration"])
-
-
-def _add_stage_label(ax, stage_name: str, start: int, end: int) -> None:
-    ax.text(
-        (start + end) / 2,
-        0.98,
-        stage_name,
-        transform=ax.get_xaxis_transform(),
-        ha="center",
-        va="top",
-        fontsize=9,
-        color="0.25",
-    )
-
-
-def _is_negative_error_scorer(scoring) -> bool:
-    return isinstance(scoring, str) and scoring.startswith("neg_")
-
-
-def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
-    dts = []
-    for segment in start_end_list:
-        dts.append(segment[1] - segment[0])
-
-    total_time:float = sum(dts)
-    percents = [100*dt/total_time for dt in dts]
-
-    logger.warning("RUNTIME BREAKDOWN")
-    for i in range(len(start_end_list)):
-        logger.warning(f"{percents[i]:05.2f}%: {start_end_list[i][2]}")
-
-
-def plot_yy(y_pred:NDArray, y_true:NDArray) -> None:
+def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str) -> None:
     if len(y_pred) != len(y_true):
         raise ValueError(f"Length of y_pred ({len(y_pred)}) does not match length of y_true ({len(y_true)}).")
 
@@ -300,10 +299,10 @@ def plot_yy(y_pred:NDArray, y_true:NDArray) -> None:
     plt.xlabel("True Target Value")
     plt.ylabel("CKRR Prediction")
     plt.title("Target Values Versus CKRR Predictions")
-    plt.savefig("plot-yy.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f"{OUTPUT_DIR}/plot-yy.png", dpi=300, bbox_inches="tight")
 
 
-def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins: int = 30):
+def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str):
     y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
 
@@ -350,5 +349,5 @@ def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins: int = 30):
     ax.set_title("Prediction Error Distribution")
     ax.legend()
     fig.tight_layout()
-    fig.savefig("plot-error_histogram.png", dpi=300, bbox_inches="tight")
+    fig.savefig(f"{OUTPUT_DIR}/plot-error_histogram.png", dpi=300, bbox_inches="tight")
     plt.close(fig)

@@ -360,7 +360,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         kernel_types=None,
         normalizations=None,
         normalize_kernel_weights=False,
-        compute_dtype=np.float64,
+        compute_dtype,
     ):
         self.alpha = alpha
         self.gammas = gammas
@@ -647,9 +647,9 @@ def staged_random_search_cv(
         )
         time_cache_end: float = perf_counter()
         cache_timing_label = (
-            "Training: Distance Caching"
+            "Distance Matrix Pre-Caching"
             if distance_cache is not None
-            else "Training: Distance Caching (Unavailable)"
+            else "Distance Matrix Pre-Caching (Unavailable)"
         )
         time_log.info(
             f"Distance cache preparation completed in "
@@ -658,7 +658,7 @@ def staged_random_search_cv(
     else:
         time_cache_start = 0.0
         time_cache_end = 0.0
-        cache_timing_label = "Training: Distance Caching (Skipped)"
+        cache_timing_label = "Distance Matrix Pre-Caching (Skipped)"
 
     stage1_estimator = _clone_with_params(
         estimator,

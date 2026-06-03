@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import subprocess
+import threading
 
 from joblib import Parallel, delayed, effective_n_jobs
 import numpy as np
@@ -20,6 +21,7 @@ from utilities import configure_logging
 
 configure_logging(VERBOSITY)
 logger = logging.getLogger("kernel-cache")
+_kernel_work_buffers = threading.local()
 
 
 @dataclass(frozen=True)
@@ -500,20 +502,51 @@ def predict_fold_from_distances(
     if alpha <= 0:
         raise ValueError(f"alpha must be positive, got {alpha}.")
 
+    work_buffers = thread_kernel_work_buffers()
     K_train = composite_kernel_from_distances(
         fold.train_distances,
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        out=work_buffer_for(
+            work_buffers,
+            fold.train_distances[0].shape,
+            fold.train_distances[0].dtype,
+            "total",
+        ),
+        temp=work_buffer_for(
+            work_buffers,
+            fold.train_distances[0].shape,
+            fold.train_distances[0].dtype,
+            "component",
+        ),
     )
     K_train[np.diag_indices_from(K_train)] += alpha
 
-    dual_coef = solve(K_train, fold.y_train_transformed, assume_a="pos")
+    dual_coef = solve(
+        K_train,
+        fold.y_train_transformed,
+        assume_a="pos",
+        overwrite_a=True,
+        check_finite=False,
+    )
     K_validation = composite_kernel_from_distances(
         fold.validation_train_distances,
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        out=work_buffer_for(
+            work_buffers,
+            fold.validation_train_distances[0].shape,
+            fold.validation_train_distances[0].dtype,
+            "total",
+        ),
+        temp=work_buffer_for(
+            work_buffers,
+            fold.validation_train_distances[0].shape,
+            fold.validation_train_distances[0].dtype,
+            "component",
+        ),
     )
     y_pred_transformed = K_validation @ dual_coef
     return inverse_transform_target(fold.target_transformer, y_pred_transformed)
@@ -525,30 +558,75 @@ def composite_kernel_from_distances(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    out: NDArray | None = None,
+    temp: NDArray | None = None,
 ) -> NDArray:
     if not distances:
         raise ValueError("At least one distance matrix is required.")
     if not (len(distances) == len(gammas) == len(weights) == len(kernel_types)):
         raise ValueError("distances, gammas, weights, and kernel_types must have matching lengths.")
 
-    K_total = None
-    for distance, gamma, weight, kernel_type in zip(
-        distances, gammas, weights, kernel_types
+    first_distance = distances[0]
+    if out is None:
+        out = np.empty_like(first_distance)
+    elif out.shape != first_distance.shape:
+        raise ValueError(f"out has shape {out.shape}, expected {first_distance.shape}.")
+
+    if len(distances) > 1:
+        if temp is None:
+            temp = np.empty_like(first_distance)
+        elif temp.shape != first_distance.shape:
+            raise ValueError(
+                f"temp has shape {temp.shape}, expected {first_distance.shape}."
+            )
+
+    for component_index, (distance, gamma, weight, kernel_type) in enumerate(
+        zip(distances, gammas, weights, kernel_types)
     ):
         if gamma < 0:
             raise ValueError(f"gamma must be non-negative, got {gamma}.")
         if weight < 0:
             raise ValueError(f"kernel weight must be non-negative, got {weight}.")
+        if distance.shape != first_distance.shape:
+            raise ValueError(
+                "All distance matrices in one composite kernel must have the same "
+                f"shape; got {distance.shape} and {first_distance.shape}."
+            )
 
         distance_spec_for_kernel(kernel_type)
-        K = np.exp(-gamma * distance).astype(distance.dtype, copy=False)
-        K *= weight
-        if K_total is None:
-            K_total = K
-        else:
-            K_total += K
+        component = out if component_index == 0 else temp
+        np.multiply(distance, -gamma, out=component, casting="unsafe")
+        np.exp(component, out=component)
+        component *= weight
 
-    return K_total
+        if component_index > 0:
+            out += component
+
+    return out
+
+
+def thread_kernel_work_buffers() -> dict:
+    buffers = getattr(_kernel_work_buffers, "buffers", None)
+    if buffers is None:
+        buffers = {}
+        _kernel_work_buffers.buffers = buffers
+
+    return buffers
+
+
+def work_buffer_for(
+    buffers: dict,
+    shape: tuple[int, ...],
+    dtype: np.dtype | type | str,
+    role: str,
+) -> NDArray:
+    dtype = np.dtype(dtype)
+    key = (shape, dtype.str, role)
+    buffer = buffers.get(key)
+    if buffer is None:
+        buffer = np.empty(shape, dtype=dtype)
+        buffers[key] = buffer
+    return buffer
 
 
 def score_predictions(y_true, y_pred, scoring) -> float:

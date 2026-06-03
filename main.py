@@ -1,7 +1,9 @@
 import logging
 import random
+from os import makedirs
 
 import numpy as np
+from numpy._core import float32
 from numpy.typing import NDArray
 
 import config
@@ -14,11 +16,13 @@ from search_random import CompositeKRREstimator, staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
-from time import perf_counter
+from time import perf_counter, time
 from config_validation import validate_config
+from pathlib import Path
 
 # 0) Initialize
 time_0:float = perf_counter()
+TIMESTAMP:int = int(time())
 validate_config()
 
 configure_logging(config.VERBOSITY)
@@ -33,6 +37,16 @@ if config.SEED is None:
 random.seed(config.SEED)
 np.random.seed(config.SEED)
 rng = np.random.default_rng(config.SEED)
+
+if config.OUTPUT_DIR is None:
+    logging.warning(f"`OUTPUT_DIR` is `None`. Setting output directory to `output/{TIMESTAMP}`")
+if config.OVERWRITE_OK or config.OVERWRITE_OK is not None:
+    makedirs(config.OUTPUT_DIR, exist_ok=True)
+else:
+    makedirs(config.OUTPUT_DIR, exist_ok=False)
+logging.warning(f"Output will be written to {config.OUTPUT_DIR}")
+
+
 time_end_initialization:float = perf_counter()
 time_log.debug(f"Initialization completed in {time_dif(time_0, time_end_initialization)}.")
 
@@ -49,15 +63,14 @@ time_log.info(f"Descriptor prepared in "
 
 # 2) Load Target
 time_start_prepare_target:float = perf_counter()
-target = Target(name=config.Y_NAME, path=config.Y_PATH, normalization=config.Y_NORM)
+target = Target(name=config.Y_NAME, path=Path(config.Y_PATH), normalization=config.Y_NORM)
 target_data = target.load_target_from_npy()
 TARGET_LENGTH: int = target.n_samples
 
 preparation.validate_descriptor_target_lengths(descriptors.blocks, target_data)
 time_end_prepare_target:float = perf_counter()
 
-time_log.info(f"Target prepared in "
-              f"{time_dif(time_start_prepare_target, time_end_prepare_target)}.")
+time_log.info(f"Target prepared in {time_dif(time_start_prepare_target, time_end_prepare_target)}.")
 
 # 3) Split/Validate
 time_start_prepare_splits:float = perf_counter()
@@ -125,8 +138,7 @@ else: # Using pre-defined splits. Separate config validation.
 
 time_end_prepare_splits:float = perf_counter()
 
-time_log.info(f"Splits prepared in "
-              f"{time_dif(time_start_prepare_splits, time_end_prepare_splits)}.")
+time_log.info(f"Splits prepared in {time_dif(time_start_prepare_splits, time_end_prepare_splits)}.")
 
 # 4) Begin Training
 time_start_training:float = perf_counter()
@@ -136,12 +148,23 @@ y_train_val = target_data[idx_train_val]
 X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
 y_test = target_data[idx_test]
 
+if config.KRR_COMPUTE_DTYPE == "float32":
+    cdt = float32
+elif config.KRR_COMPUTE_DTYPE == "np.float32":
+    cdt = np.float32
+elif config.KRR_COMPUTE_DTYPE == "float64":
+    cdt = float
+elif config.KRR_COMPUTE_DTYPE == "np.float64":
+    cdt = np.float64
+else:
+    raise TypeError(f"Unexpected KRR_COMPUTE_DTYPE: {config.KRR_COMPUTE_DTYPE}")
+
 base_estimator = CompositeKRREstimator(
     names=config.X_NAMES,
     kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
     normalizations=config.X_NORMS,
     normalize_kernel_weights=True,
-    compute_dtype=config.KRR_COMPUTE_DTYPE,
+    compute_dtype=cdt,
 )
 estimator = TransformedTargetRegressor(
     regressor=base_estimator,
@@ -179,8 +202,7 @@ search_result = staged_random_search_cv(
 )
 time_end_training:float = perf_counter()
 
-time_log.info(f"Training completed in "
-              f"{time_dif(time_start_training, time_end_training)}.")
+time_log.info(f"Training completed in {time_dif(time_start_training, time_end_training)}.")
 
 # 5) Postprocessing
 time_start_postprocessing:float = perf_counter()
@@ -193,19 +215,19 @@ logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
 postprocess.plot_random_search_validation_error(
     search_result,
-    scoring=scoring)
+    scoring=scoring,
+    OUTPUT_DIR=config.OUTPUT_DIR)
 
 if len(idx_test) > 0:
     y_pred = search_result.best_estimator_.predict(X_test)
     test_rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
     logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
-    postprocess.plot_yy(y_pred=y_pred, y_true=y_test)
-    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test)
+    postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
+    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=30, OUTPUT_DIR=config.OUTPUT_DIR)
 
 time_end_postprocessing:float = perf_counter()
 
-time_log.info(f"Post-processing completed in "
-              f"{time_dif(time_start_postprocessing, time_end_postprocessing)}.")
+time_log.info(f"Post-processing completed in {time_dif(time_start_postprocessing, time_end_postprocessing)}.")
 
 time_f:float = perf_counter()
 time_log.warning(f"CKRR learning stack completed in {time_dif(time_0, time_f)}.")
@@ -213,10 +235,8 @@ time_log.warning(f"CKRR learning stack completed in {time_dif(time_0, time_f)}."
 training_timings = search_result.timings
 
 postprocess.runtime_analysis([
-    (time_0, time_end_initialization, "Initialization"),
-    (time_start_prepare_descriptor, time_end_prepare_descriptor, "Descriptor Preparation"),
-    (time_start_prepare_target, time_end_prepare_target, "Target Preparation"),
-    (time_start_prepare_splits, time_end_prepare_splits, "Split Preparation"),
+    (time_0, time_end_initialization, "Initialization and Config Validation"),
+    (time_start_prepare_descriptor, time_end_prepare_target, "Descriptor/Target Preparation"),
     *training_timings,
     (time_start_postprocessing, time_end_postprocessing, "Post-Processing")
 ])
