@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 import matplotlib
 
 import numpy as np
@@ -8,7 +9,6 @@ from utilities import configure_logging
 from config import VERBOSITY
 import logging
 import matplotlib.pyplot as plt
-
 
 configure_logging(VERBOSITY)
 logger = logging.getLogger("post-processing")
@@ -229,6 +229,132 @@ def best_validation_fold_errors(search_result, *, scoring) -> NDArray:
         ],
         dtype=float,
     )
+
+
+def summarize_kernel_contribution_results(
+    full_result,
+    *,
+    single_kernel_results: dict[str, object],
+    leave_one_out_results: dict[str, object],
+    scoring,
+    output_dir: str | None = None,
+    ddof: int = 1,
+) -> list[dict]:
+    full_errors = best_validation_fold_errors(full_result, scoring=scoring)
+    full_mean, full_std = _mean_std_finite(full_errors, ddof=ddof)
+    metric_label = validation_metric_label(scoring).lower()
+    rows = []
+
+    for kernel_name, single_result in single_kernel_results.items():
+        single_errors = best_validation_fold_errors(single_result, scoring=scoring)
+        single_mean, single_std = _mean_std_finite(single_errors, ddof=ddof)
+
+        drop_result = leave_one_out_results.get(kernel_name)
+        if drop_result is None:
+            drop_errors = np.full_like(full_errors, np.nan, dtype=float)
+            drop_mean = np.nan
+            drop_std = np.nan
+            paired_delta = np.full_like(full_errors, np.nan, dtype=float)
+        else:
+            drop_errors = best_validation_fold_errors(drop_result, scoring=scoring)
+            drop_mean, drop_std = _mean_std_finite(drop_errors, ddof=ddof)
+            paired_delta = _paired_fold_delta(
+                drop_errors,
+                full_errors,
+                kernel_name=kernel_name,
+            )
+
+        delta_mean, delta_std = _mean_std_finite(paired_delta, ddof=ddof)
+        finite_delta = paired_delta[np.isfinite(paired_delta)]
+        fold_wins = int(np.count_nonzero(finite_delta > 0.0))
+        n_folds = int(finite_delta.size)
+
+        rows.append(
+            {
+                "kernel": kernel_name,
+                "full_validation_error": full_mean,
+                "full_fold_std": full_std,
+                "single_validation_error": single_mean,
+                "single_fold_std": single_std,
+                "single_minus_full": single_mean - full_mean,
+                "drop_validation_error": drop_mean,
+                "drop_fold_std": drop_std,
+                "drop_minus_full": drop_mean - full_mean,
+                "drop_fold_delta_mean": delta_mean,
+                "drop_fold_delta_std": delta_std,
+                "drop_fold_wins": fold_wins,
+                "n_folds": n_folds,
+            }
+        )
+
+    logger.warning("KERNEL CONTRIBUTION SUMMARY")
+    logger.warning(f"Full model {metric_label}: {full_mean:.6g} ± {full_std:.6g}")
+    for row in rows:
+        logger.warning(
+            f"{row['kernel']}: single {metric_label} "
+            f"{row['single_validation_error']:.6g}; drop-one {metric_label} "
+            f"{row['drop_validation_error']:.6g}; contribution "
+            f"{row['drop_minus_full']:+.6g}; fold wins "
+            f"{row['drop_fold_wins']}/{row['n_folds']}"
+        )
+
+    if output_dir is not None:
+        _write_kernel_contribution_csv(rows, output_dir)
+
+    return rows
+
+
+def _paired_fold_delta(drop_errors, full_errors, *, kernel_name: str) -> NDArray:
+    drop_errors = np.asarray(drop_errors, dtype=float)
+    full_errors = np.asarray(full_errors, dtype=float)
+    if drop_errors.shape != full_errors.shape:
+        raise ValueError(
+            f"Cannot compute paired fold deltas for {kernel_name}: "
+            f"drop-one fold errors have shape {drop_errors.shape}, "
+            f"full fold errors have shape {full_errors.shape}."
+        )
+
+    return drop_errors - full_errors
+
+
+def _mean_std_finite(values, *, ddof: int) -> tuple[float, float]:
+    values = np.asarray(values, dtype=float)
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return np.nan, np.nan
+
+    mean = float(np.mean(finite_values))
+    if finite_values.size <= ddof:
+        std = np.nan
+    else:
+        std = float(np.std(finite_values, ddof=ddof))
+
+    return mean, std
+
+
+def _write_kernel_contribution_csv(rows: list[dict], output_dir: str) -> None:
+    output_path = Path(output_dir) / "kernel-contributions.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "kernel",
+        "full_validation_error",
+        "full_fold_std",
+        "single_validation_error",
+        "single_fold_std",
+        "single_minus_full",
+        "drop_validation_error",
+        "drop_fold_std",
+        "drop_minus_full",
+        "drop_fold_delta_mean",
+        "drop_fold_delta_std",
+        "drop_fold_wins",
+        "n_folds",
+    ]
+
+    with output_path.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _sorted_split_score_keys(cv_results: dict) -> list[str]:

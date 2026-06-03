@@ -12,6 +12,7 @@ import preprocess
 import postprocess
 from class_CompositeDescriptor import CompositeDescriptor
 from class_Target import Target
+from kernel_contributions import evaluate_kernel_contributions
 from search_random import CompositeKRREstimator, staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
@@ -204,11 +205,6 @@ if scoring.startswith("neg_"):
 logger.warning(f"Best CV {config.KRR_SCORE_METRIC}: {best_cv_score:.6g}")
 logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
-postprocess.plot_random_search_validation_error(
-    search_result,
-    scoring=scoring,
-    OUTPUT_DIR=config.OUTPUT_DIR)
-
 if len(idx_test) > 0:
     y_pred = search_result.best_estimator_.predict(X_test)
 
@@ -232,6 +228,57 @@ if len(idx_test) > 0:
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
     postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=50, OUTPUT_DIR=config.OUTPUT_DIR)
 
+postprocess.plot_random_search_validation_error(
+    search_result,
+    scoring=scoring,
+    OUTPUT_DIR=config.OUTPUT_DIR)
+time_end_postprocessing_plots:float = perf_counter()
+
+kernel_contribution_timings = []
+if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
+    contribution_bayesian_trials = (
+        config.KRR_BAYESIAN_SEARCH_TRIALS
+        if config.KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS is None
+        else config.KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS
+    )
+
+    _, kernel_contribution_timings = evaluate_kernel_contributions(
+        search_result,
+        X_train_val,
+        y_train_val,
+        component_names=config.X_NAMES,
+        kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
+        normalizations=config.X_NORMS,
+        target_normalization=config.Y_NORM,
+        compute_dtype=config.KRR_COMPUTE_DTYPE,
+        scoring=scoring,
+        cv=cv,
+        search_kwargs={
+            "alpha_bounds": config.KRR_ALPHA_BOUNDS,
+            "gamma_bounds": config.KRR_GAMMA_BOUNDS,
+            "n_iter_stage1": config.KRR_RANDOM_SEARCH_STAGE1,
+            "n_iter_stage2": config.KRR_RANDOM_SEARCH_STAGE2,
+            "n_iter_stage3": config.KRR_RANDOM_SEARCH_STAGE3,
+            "random_state": config.SEED,
+            "n_jobs": config.KRR_RANDOM_SEARCH_N_JOBS,
+            "prefix": "regressor__",
+            "n_trials_bayesian": contribution_bayesian_trials,
+            "bayesian_timeout": config.KRR_BAYESIAN_SEARCH_TIMEOUT,
+            "bayesian_patience": config.KRR_BAYESIAN_SEARCH_PATIENCE,
+            "use_distance_cache": config.KRR_USE_DISTANCE_CACHE,
+            "distance_block_size": config.KRR_DISTANCE_BLOCK_SIZE,
+            "distance_dtype": config.KRR_COMPUTE_DTYPE,
+            "distance_cache_n_jobs": config.KRR_DISTANCE_CACHE_N_JOBS,
+            "distance_cache_memory_fraction": (
+                config.KRR_DISTANCE_CACHE_MEMORY_FRACTION
+            ),
+            "top_k_fraction": config.KRR_TOP_K_FRACTION,
+            "top_k_min_candidates": config.KRR_TOP_K_MIN_CANDIDATES,
+        },
+        output_dir=config.OUTPUT_DIR,
+        ddof=1,
+    )
+
 time_end_postprocessing:float = perf_counter()
 
 time_log.info(f"Post-processing completed in {time_dif(time_start_postprocessing, time_end_postprocessing)}.")
@@ -245,5 +292,6 @@ postprocess.runtime_analysis([
     (time_0, time_end_initialization, "Initialization and Config Validation"),
     (time_start_prepare_descriptor, time_end_prepare_target, "Descriptor/Target Preparation"),
     *training_timings,
-    (time_start_postprocessing, time_end_postprocessing, "Post-Processing")
+    (time_start_postprocessing, time_end_postprocessing_plots, "Post-Processing: Final Model Evaluation"),
+    *kernel_contribution_timings,
 ])

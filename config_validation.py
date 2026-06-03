@@ -65,3 +65,18 @@ def validate_config() -> None:
         or config.KRR_TOP_K_MIN_CANDIDATES <= 0
     ):
         raise ValueError("`KRR_TOP_K_MIN_CANDIDATES` must be a positive int.")
+
+    if not isinstance(config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS, bool):
+        raise ValueError("`KRR_EVALUATE_KERNEL_CONTRIBUTIONS` must be a bool.")
+
+    if (
+        config.KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS is not None
+        and (
+            type(config.KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS) is not int
+            or config.KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS < 0
+        )
+    ):
+        raise ValueError(
+            "`KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS` must be "
+            "`None` or a non-negative int."
+        )
