@@ -1,10 +1,13 @@
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import NDArray
 from sklearn.model_selection import RandomizedSearchCV
 from utilities import configure_logging
 from config import VERBOSITY
 import logging
+import matplotlib.pyplot as plt
+
 
 configure_logging(VERBOSITY)
 logger = logging.getLogger("post-processing")
@@ -145,10 +148,9 @@ def log_random_search_improvements(search_result, *, scoring, logger) -> None:
 
 def plot_random_search_validation_error(
     search_result,
-    output_path: str | Path,
     *,
     scoring: str | None = None,
-) -> Path:
+):
     history = search_result.random_search_history_
     if not history:
         raise ValueError("No random search history is available to plot.")
@@ -159,9 +161,6 @@ def plot_random_search_validation_error(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     improvements = [
         record
@@ -224,10 +223,8 @@ def plot_random_search_validation_error(
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(output_path, dpi=160)
+    fig.savefig("plot-loss.png", dpi=300)
     plt.close(fig)
-
-    return output_path
 
 
 def validation_error_from_score(score: float, scoring) -> float:
@@ -289,3 +286,69 @@ def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
     logger.warning("RUNTIME BREAKDOWN")
     for i in range(len(start_end_list)):
         logger.warning(f"{percents[i]:05.2f}%: {start_end_list[i][2]}")
+
+
+def plot_yy(y_pred:NDArray, y_true:NDArray) -> None:
+    if len(y_pred) != len(y_true):
+        raise ValueError(f"Length of y_pred ({len(y_pred)}) does not match length of y_true ({len(y_true)}).")
+
+    plot_min = min(np.min(y_true), np.min(y_pred))
+    plot_max = max(np.max(y_true), np.max(y_pred))
+    plt.scatter(y_true, y_pred, s=2, color="goldenrod", label="Predictions")
+    plt.plot([plot_min, plot_max], [plot_min, plot_max], color="black", linestyle=":", label="y = x")
+    plt.legend()
+    plt.xlabel("True Target Value")
+    plt.ylabel("CKRR Prediction")
+    plt.title("Target Values Versus CKRR Predictions")
+    plt.savefig("plot-yy.png", dpi=300, bbox_inches="tight")
+
+
+def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins: int = 30):
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+
+    if len(y_pred) != len(y_true):
+        raise ValueError(
+            f"Length of y_pred ({len(y_pred)}) does not match length of "
+            f"y_true ({len(y_true)})."
+        )
+    if len(y_pred) == 0:
+        raise ValueError("Cannot generate an error histogram with zero samples.")
+    if bins <= 0:
+        raise ValueError(f"bins must be positive, got {bins}.")
+
+    errors = y_pred - y_true
+    error_mean = float(np.mean(errors))
+    error_std = float(np.std(errors))
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.hist(
+        errors,
+        bins=bins,
+        density=True,
+        alpha=0.65,
+        color="steelblue",
+        edgecolor="white",
+        label="Prediction errors",
+    )
+
+    x = np.linspace(np.min(errors), np.max(errors), 300)
+    normal_pdf = (
+        np.exp(-0.5 * ((x - error_mean) / error_std) ** 2)
+        / (error_std * np.sqrt(2.0 * np.pi)))
+
+    ax.plot(
+        x,
+        normal_pdf,
+        color="black",
+        linewidth=2,
+        label=f"Normal fit (mu={error_mean:.3g}, sigma={error_std:.3g})")
+
+    ax.axvline(0.0, color="0.35", linestyle=":", linewidth=1, label="Zero error")
+    ax.set_xlabel("Prediction Error (y_pred - y_true)")
+    ax.set_ylabel("Density")
+    ax.set_title("Prediction Error Distribution")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig("plot-error_histogram.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)

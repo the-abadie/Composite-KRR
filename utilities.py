@@ -10,6 +10,16 @@ def configure_logging(verbosity: int) -> None:
         level = logging.DEBUG
 
     logging.basicConfig(level=level, format="[%(name)s]: %(message)s")
+    _quiet_third_party_loggers()
+
+
+def _quiet_third_party_loggers() -> None:
+    for logger_name in (
+        "matplotlib",
+        "matplotlib.font_manager",
+        "PIL",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def time_dif(start:float, end:float) -> str:

@@ -7,9 +7,9 @@ from numpy.typing import NDArray
 import config
 import preparation
 import preprocess
+import postprocess
 from class_CompositeDescriptor import CompositeDescriptor
 from class_Target import Target
-from postprocess import plot_random_search_validation_error, runtime_analysis
 from search_random import CompositeKRREstimator, staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
@@ -185,18 +185,16 @@ if scoring.startswith("neg_"):
 logger.warning(f"Best CV {config.KRR_SCORE_METRIC}: {best_cv_score:.6g}")
 logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
-if config.KRR_RANDOM_SEARCH_PLOT_PATH is not None:
-    plot_path = plot_random_search_validation_error(
-        search_result,
-        config.KRR_RANDOM_SEARCH_PLOT_PATH,
-        scoring=scoring,
-    )
-    logger.warning(f"Search validation plot written to {plot_path}")
+postprocess.plot_random_search_validation_error(
+    search_result,
+    scoring=scoring)
 
 if len(idx_test) > 0:
     y_pred = search_result.best_estimator_.predict(X_test)
     test_rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
     logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
+    postprocess.plot_yy(y_pred=y_pred, y_true=y_test)
+    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test)
 
 time_end_postprocessing:float = perf_counter()
 
@@ -208,7 +206,7 @@ time_log.warning(f"CKRR learning stack completed in {time_dif(time_0, time_f)}."
 
 training_timings = search_result.timings
 
-runtime_analysis([
+postprocess.runtime_analysis([
     (time_0, time_end_initialization, "Initialization"),
     (time_start_prepare_descriptor, time_end_prepare_descriptor, "Descriptor Preparation"),
     (time_start_prepare_target, time_end_prepare_target, "Target Preparation"),

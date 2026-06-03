@@ -1,4 +1,4 @@
-- [ ] Pre-define splits
+- [x] Pre-define splits
 - [ ] Allow pre-computation of kernels
 - [ ] Block processing of kernels
 - [ ] Do some memory estimates for these kernels and log them

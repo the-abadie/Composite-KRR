@@ -1,19 +1,20 @@
-SEED = None
+SEED = 1
 VERBOSITY = 2
 
-X_PATHS = ["sample/desc1.npy", "sample/desc2.npy", "sample/desc3.npy"]
-X_NAMES = ["desc1", "desc2", "desc3"]
-X_NORMS = ["standard", "standard", "standard"]
+X_PATHS = ["sample/QM7/QM7_overlap.npy",]
+X_NAMES = ["5-component overlap"]
+X_NORMS = ["standard"]
 
-Y_PATH = "sample/target1.npy"
-Y_NAME = "my_target"
+Y_PATH = "sample/QM7/atomization_energy.npy"
+Y_NAME = "atomization energy"
 Y_NORM = "standard"
 
 USE_PREDEFINED_SPLITS = False
 PREDEF_TRAINING_IDX_PATH = "predef_training_idx.npy"
 PREDEF_VAL_KFOLD_IDX_PATH = "predef_val_kfold_idx.npy"
 PREDEF_TESTING_IDX_PATH  = "predef_testing_idx.npy"
-N_SAMPLES = 1000
+
+N_SAMPLES = 500
 TRAIN_VAL_SPLIT = 0.70
 N_KFOLD = 5
 STRATIFY = True
@@ -31,5 +32,5 @@ KRR_RANDOM_SEARCH_N_JOBS = None
 KRR_RANDOM_SEARCH_PLOT_PATH = "random_search_validation_error.png"
 KRR_BAYESIAN_SEARCH_TRIALS = 50
 KRR_BAYESIAN_SEARCH_TIMEOUT = None
-KRR_BAYESIAN_SEARCH_PATIENCE = 10
+KRR_BAYESIAN_SEARCH_PATIENCE = 25
 KRR_SCORE_METRIC = "neg_mean_absolute_error"

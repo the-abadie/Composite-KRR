@@ -1,1 +1,6 @@
 __pycache__
+.DS_Store
+.venv
+depr
+plot-*
+sample/QM7/*.npy
