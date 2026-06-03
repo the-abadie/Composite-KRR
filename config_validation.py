@@ -44,6 +44,17 @@ def validate_config() -> None:
     ):
         raise ValueError("`KRR_DISTANCE_CACHE_N_JOBS` must be `None` or a non-zero int.")
 
+    if (
+        config.KRR_RANDOM_SEARCH_BLAS_THREADS is not None
+        and (
+            type(config.KRR_RANDOM_SEARCH_BLAS_THREADS) is not int
+            or config.KRR_RANDOM_SEARCH_BLAS_THREADS <= 0
+        )
+    ):
+        raise ValueError(
+            "`KRR_RANDOM_SEARCH_BLAS_THREADS` must be `None` or a positive int."
+        )
+
     if not (
         isinstance(config.KRR_DISTANCE_CACHE_MEMORY_FRACTION, float)
         or isinstance(config.KRR_DISTANCE_CACHE_MEMORY_FRACTION, int)

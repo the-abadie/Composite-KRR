@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from contextlib import nullcontext
 from time import perf_counter
 
 import numpy as np
@@ -103,6 +104,7 @@ class CachedRandomSearchCV:
         cv,
         random_state=None,
         n_jobs=None,
+        blas_threads: int | None = 1,
         refit=True,
         distance_cache,
     ):
@@ -113,6 +115,7 @@ class CachedRandomSearchCV:
         self.cv = cv
         self.random_state = random_state
         self.n_jobs = n_jobs
+        self.blas_threads = blas_threads
         self.refit = refit
         self.distance_cache = distance_cache
 
@@ -146,7 +149,7 @@ class CachedRandomSearchCV:
                 )
                 for params in candidates
             ]
-            with threadpool_limits(limits=1):
+            with _threadpool_limits_for_blas(self.blas_threads):
                 scored_folds = Parallel(n_jobs=self.n_jobs, prefer="threads")(
                     delayed(_score_cached_candidate_fold)(
                         candidate_index,
@@ -211,6 +214,7 @@ class CachedRandomSearchCV:
         self.failed_fold_scores_ = int(np.count_nonzero(failed_fold_mask))
         self.failed_candidates_ = int(np.count_nonzero(~valid_candidates))
         self.n_jobs_ = self.n_jobs
+        self.blas_threads_ = self.blas_threads
         self.parallel_backend_ = (
             "serial" if self.n_jobs in (None, 1) else "threading"
         )
@@ -306,6 +310,13 @@ def _safe_score_cached_fold(
         )
     except LinAlgError:
         return np.nan
+
+
+def _threadpool_limits_for_blas(blas_threads: int | None):
+    if blas_threads is None:
+        return nullcontext()
+
+    return threadpool_limits(limits=blas_threads)
 
 
 @dataclass(frozen=True)
@@ -893,6 +904,7 @@ def staged_random_search_cv(
     cv,
     random_state=None,
     n_jobs=None,
+    random_search_blas_threads: int | None = 1,
     refit=True,
     prefix: str = "",
     n_trials_bayesian: int | None = None,
@@ -999,6 +1011,7 @@ def staged_random_search_cv(
         cv=cv,
         random_state=random_state,
         n_jobs=n_jobs,
+        blas_threads=random_search_blas_threads,
         refit=refit,
         stage_name="Stage 1",
         distance_cache=distance_cache,
@@ -1044,6 +1057,7 @@ def staged_random_search_cv(
         cv=cv,
         random_state=random_state,
         n_jobs=n_jobs,
+        blas_threads=random_search_blas_threads,
         refit=refit,
         stage_name="Stage 2",
         distance_cache=distance_cache,
@@ -1107,6 +1121,7 @@ def staged_random_search_cv(
         cv=cv,
         random_state=random_state,
         n_jobs=n_jobs,
+        blas_threads=random_search_blas_threads,
         refit=refit,
         stage_name="Stage 3",
         distance_cache=distance_cache,
@@ -1234,6 +1249,7 @@ def _fit_search(
     cv,
     random_state=None,
     n_jobs=None,
+    blas_threads: int | None = 1,
     refit=True,
     stage_name: str = "Random search",
     distance_cache=None,
@@ -1263,6 +1279,7 @@ def _fit_search(
         cv=cv,
         random_state=random_state,
         n_jobs=n_jobs,
+        blas_threads=blas_threads,
         refit=refit,
         stage_name=stage_name,
         distance_cache=distance_cache,
@@ -1313,6 +1330,7 @@ def _fit_cached_random_search(
     cv,
     random_state=None,
     n_jobs=None,
+    blas_threads: int | None = 1,
     refit=True,
     stage_name: str = "Random search",
     distance_cache,
@@ -1328,12 +1346,14 @@ def _fit_cached_random_search(
         cv=cv,
         random_state=random_state,
         n_jobs=n_jobs,
+        blas_threads=blas_threads,
         refit=refit,
         distance_cache=distance_cache,
     )
     search.stage_name = stage_name
     search.fit(X, y)
     attach_random_search_history(search, scoring=scoring)
+    search.distance_cache = None
     return search
 
 
