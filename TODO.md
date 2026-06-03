@@ -1,7 +1,7 @@
 - [x] Pre-define splits
-- [ ] Allow pre-computation of kernels
-- [ ] Block processing of kernels
-- [ ] Do some memory estimates for these kernels and log them
+- [x] Allow pre-computation of kernels
+- [x] Block processing of kernels
+- [x] Do some memory estimates for these kernels and log them
 - [ ] Finish post-processing stuff (plots, save logs to file, config to save model.joblib/HPs)
 - [ ] Heuristic for closing in on hyperparameters based on median distance
 - [ ] TF support for GPU-acceleration

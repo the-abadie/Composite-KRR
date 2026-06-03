@@ -39,12 +39,12 @@ np.random.seed(config.SEED)
 rng = np.random.default_rng(config.SEED)
 
 if config.OUTPUT_DIR is None:
-    logging.warning(f"`OUTPUT_DIR` is `None`. Setting output directory to `output/{TIMESTAMP}`")
+    logger.warning(f"`OUTPUT_DIR` is `None`. Setting output directory to `output/{TIMESTAMP}`")
 if config.OVERWRITE_OK or config.OVERWRITE_OK is not None:
     makedirs(config.OUTPUT_DIR, exist_ok=True)
 else:
     makedirs(config.OUTPUT_DIR, exist_ok=False)
-logging.warning(f"Output will be written to {config.OUTPUT_DIR}")
+logger.warning(f"Output will be written to {config.OUTPUT_DIR}")
 
 
 time_end_initialization:float = perf_counter()
@@ -148,23 +148,12 @@ y_train_val = target_data[idx_train_val]
 X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
 y_test = target_data[idx_test]
 
-if config.KRR_COMPUTE_DTYPE == "float32":
-    cdt = float32
-elif config.KRR_COMPUTE_DTYPE == "np.float32":
-    cdt = np.float32
-elif config.KRR_COMPUTE_DTYPE == "float64":
-    cdt = float
-elif config.KRR_COMPUTE_DTYPE == "np.float64":
-    cdt = np.float64
-else:
-    raise TypeError(f"Unexpected KRR_COMPUTE_DTYPE: {config.KRR_COMPUTE_DTYPE}")
-
 base_estimator = CompositeKRREstimator(
     names=config.X_NAMES,
     kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
     normalizations=config.X_NORMS,
     normalize_kernel_weights=True,
-    compute_dtype=cdt,
+    compute_dtype=config.KRR_COMPUTE_DTYPE,
 )
 estimator = TransformedTargetRegressor(
     regressor=base_estimator,
@@ -199,6 +188,8 @@ search_result = staged_random_search_cv(
     distance_dtype=config.KRR_COMPUTE_DTYPE,
     distance_cache_n_jobs=config.KRR_DISTANCE_CACHE_N_JOBS,
     distance_cache_memory_fraction=config.KRR_DISTANCE_CACHE_MEMORY_FRACTION,
+    top_k_fraction=config.KRR_TOP_K_FRACTION,
+    top_k_min_candidates=config.KRR_TOP_K_MIN_CANDIDATES,
 )
 time_end_training:float = perf_counter()
 
@@ -220,10 +211,26 @@ postprocess.plot_random_search_validation_error(
 
 if len(idx_test) > 0:
     y_pred = search_result.best_estimator_.predict(X_test)
-    test_rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
+
+    err = y_test - y_pred
+
+    test_ae = np.abs(err)
+    test_mae = np.mean(test_ae)
+    test_mae_stdev = np.std(test_ae)
+
+    test_rmse = np.sqrt(np.mean(err ** 2))
+
+    fold_mae, fold_std = postprocess.best_validation_mae_and_fold_std(
+        search_result=search_result,
+        scoring=scoring,
+        ddof=1)
+
+    logger.warning(f"Best Validation MAE across folds: {fold_mae:.6f} ± {fold_std:.6f}")
+    logger.warning(f"Held-out test MAE : {test_mae:.6g}")
     logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
+
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
-    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=30, OUTPUT_DIR=config.OUTPUT_DIR)
+    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=50, OUTPUT_DIR=config.OUTPUT_DIR)
 
 time_end_postprocessing:float = perf_counter()
 

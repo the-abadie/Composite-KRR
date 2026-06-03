@@ -1,4 +1,5 @@
 from pathlib import Path
+import matplotlib
 
 import numpy as np
 from numpy.typing import NDArray
@@ -87,15 +88,28 @@ def offset_bayesian_search_history(
     history: list[dict],
     *,
     iteration_offset: int,
+    initial_best_score: float = -np.inf,
+    initial_best_validation_error: float = np.inf,
 ) -> list[dict]:
     offset_history = []
+    best_score = initial_best_score
+    best_validation_error = initial_best_validation_error
 
     for record in history:
         stage_iteration = record["iteration"]
         offset_record = dict(record)
+        offset_record["stage_improved"] = offset_record["improved"]
         offset_record["stage"] = "Bayesian"
         offset_record["stage_iteration"] = stage_iteration
         offset_record["iteration"] = iteration_offset + stage_iteration
+        improved = offset_record["mean_test_score"] > best_score
+        if improved:
+            best_score = offset_record["mean_test_score"]
+            best_validation_error = offset_record["validation_error"]
+
+        offset_record["improved"] = improved
+        offset_record["best_mean_test_score"] = best_score
+        offset_record["best_validation_error"] = best_validation_error
         offset_history.append(offset_record)
 
     return offset_history
@@ -111,6 +125,15 @@ def bayesian_search_history(study, *, scoring) -> list[dict]:
             continue
 
         mean_test_score = float(trial.value)
+        split_scores = np.asarray(
+            trial.user_attrs.get("split_scores", []),
+            dtype=float,
+        )
+        std_test_score = (
+            float(np.std(split_scores))
+            if split_scores.size > 0 and np.all(np.isfinite(split_scores))
+            else np.nan
+        )
         validation_error = validation_error_from_score(mean_test_score, scoring)
         improved = mean_test_score > best_score
 
@@ -122,7 +145,7 @@ def bayesian_search_history(study, *, scoring) -> list[dict]:
             {
                 "iteration": len(history) + 1,
                 "mean_test_score": mean_test_score,
-                "std_test_score": np.nan,
+                "std_test_score": std_test_score,
                 "validation_error": validation_error,
                 "best_mean_test_score": best_score,
                 "best_validation_error": best_validation_error,
@@ -132,6 +155,98 @@ def bayesian_search_history(study, *, scoring) -> list[dict]:
         )
 
     return history
+
+
+def best_validation_mae_and_fold_std(
+    search_result,
+    scoring,
+    ddof: int = 0,
+) -> tuple[float, float]:
+    """
+    Return the mean validation error and fold standard deviation for the
+    final selected hyperparameters.
+
+    With sklearn's ``neg_mean_absolute_error`` scorer, the returned mean is
+    the best validation MAE.
+    """
+    fold_errors = best_validation_fold_errors(search_result, scoring=scoring)
+    finite_errors = fold_errors[np.isfinite(fold_errors)]
+
+    if finite_errors.size == 0:
+        raise ValueError("No finite validation fold errors are available.")
+
+    mean_error = float(np.mean(finite_errors))
+    if finite_errors.size <= ddof:
+        fold_std = np.nan
+    else:
+        fold_std = float(np.std(finite_errors, ddof=ddof))
+
+    return mean_error, fold_std
+
+
+def best_validation_fold_errors(search_result, *, scoring) -> NDArray:
+    """Return per-fold validation errors for the final selected hyperparameters."""
+    final_stage = getattr(search_result, "final_stage", search_result)
+
+    best_split_scores = getattr(final_stage, "best_split_scores_", None)
+    if best_split_scores is not None:
+        split_scores = np.asarray(best_split_scores, dtype=float)
+        if split_scores.size > 0:
+            return np.asarray(
+                [
+                    validation_error_from_score(float(score), scoring)
+                    for score in split_scores
+                ],
+                dtype=float,
+            )
+
+    cv_results = getattr(final_stage, "cv_results_", None)
+    if cv_results is None:
+        raise ValueError(
+            "Search result does not expose per-fold CV scores. Expected "
+            "`best_split_scores_` or `cv_results_` with split test scores."
+        )
+
+    best_index = int(
+        getattr(
+            final_stage,
+            "best_index_",
+            np.argmax(np.asarray(cv_results["mean_test_score"], dtype=float)),
+        )
+    )
+    split_scores = np.asarray(
+        [
+            cv_results[key][best_index]
+            for key in _sorted_split_score_keys(cv_results)
+        ],
+        dtype=float,
+    )
+
+    return np.asarray(
+        [
+            validation_error_from_score(float(score), scoring)
+            for score in split_scores
+        ],
+        dtype=float,
+    )
+
+
+def _sorted_split_score_keys(cv_results: dict) -> list[str]:
+    split_keys = [
+        key
+        for key in cv_results
+        if key.startswith("split") and key.endswith("_test_score")
+    ]
+    if not split_keys:
+        raise ValueError("CV results do not include per-fold split test scores.")
+
+    def split_index(key: str) -> int:
+        index = key.removesuffix("_test_score").removeprefix("split")
+        if not index.isdecimal():
+            raise ValueError(f"Unexpected split score key: {key}")
+        return int(index)
+
+    return sorted(split_keys, key=split_index)
 
 
 def log_random_search_improvements(search_result, *, scoring, logger) -> None:
@@ -217,10 +332,7 @@ def plot_random_search_validation_error(
     bayesian_history = search_result.bayesian_search_history_
     plot_history = history + bayesian_history
 
-    import matplotlib
-
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     improvements = [
         record
@@ -287,6 +399,7 @@ def plot_random_search_validation_error(
     plt.close(fig)
 
 
+
 def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str) -> None:
     if len(y_pred) != len(y_true):
         raise ValueError(f"Length of y_pred ({len(y_pred)}) does not match length of y_true ({len(y_true)}).")
@@ -343,7 +456,7 @@ def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str)
         linewidth=2,
         label=f"Normal fit (mu={error_mean:.3g}, sigma={error_std:.3g})")
 
-    ax.axvline(0.0, color="0.35", linestyle=":", linewidth=1, label="Zero error")
+    ax.axvline(0.0, color="red", linestyle=":", linewidth=1)
     ax.set_xlabel("Prediction Error (y_pred - y_true)")
     ax.set_ylabel("Density")
     ax.set_title("Prediction Error Distribution")

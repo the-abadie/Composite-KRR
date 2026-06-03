@@ -8,21 +8,25 @@ from numpy.linalg import LinAlgError
 from threadpoolctl import threadpool_limits
 from utilities import configure_logging, time_dif
 from config import VERBOSITY
-from scipy.stats import loguniform, uniform
+from scipy.stats import loguniform
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.model_selection import ParameterSampler, RandomizedSearchCV
+from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_is_fitted
 
 from class_CompositeKRR import CompositeKRR, KernelComponent
 from kernel_cache import (
     UnsupportedDistanceKernelError,
     build_distance_cache,
+    distance_spec_for_kernel,
     extract_regressor,
     extract_target_transformer,
     resolve_kernel_hyperparameters,
     resolve_sequence,
     score_fold_from_distances,
+    unpack_sample_matrix,
 )
+from kernels import pairwise_self_lp_distance
 from postprocess import (
     attach_random_search_history,
     combined_random_search_history,
@@ -37,42 +41,55 @@ logger = logging.getLogger("search")
 
 time_log = logging.getLogger("timing")
 
-class LogUniformList:
-    def __init__(self, low: float, high: float, size: int):
-        if low <= 0 or high <= low:
-            raise ValueError(
-                f"Expected 0 < low < high for log-uniform bounds, got {low}, {high}."
-            )
+class LogUniformListBounds:
+    def __init__(self, bounds: list[tuple[float, float]]):
+        if not bounds:
+            raise ValueError("bounds must contain at least one component.")
+        for low, high in bounds:
+            if low <= 0 or high <= low:
+                raise ValueError(
+                    "Expected 0 < low < high for log-uniform bounds, "
+                    f"got {(low, high)}."
+                )
+
+        self.bounds = [(float(low), float(high)) for low, high in bounds]
+
+    def rvs(self, random_state=None):
+        rng = check_random_state(random_state)
+        return [
+            float(loguniform(low, high).rvs(random_state=rng))
+            for low, high in self.bounds
+        ]
+
+
+class SimplexWeightDistribution:
+    def __init__(
+        self,
+        size: int,
+        *,
+        center: list[float] | np.ndarray | None = None,
+        concentration: float | None = None,
+        min_alpha: float = 1e-3,
+    ):
         if size <= 0:
             raise ValueError(f"size must be positive, got {size}.")
 
-        self.low = low
-        self.high = high
         self.size = size
+        if center is None:
+            alpha = np.ones(size, dtype=float)
+        else:
+            center = _normalize_weights(center, size=size)
+            if concentration is None or concentration <= 0:
+                raise ValueError(
+                    "concentration must be positive when center is provided."
+                )
+            alpha = center * float(concentration)
+
+        self.alpha = np.maximum(alpha, min_alpha)
 
     def rvs(self, random_state=None):
-        return loguniform(self.low, self.high).rvs(
-            size=self.size, random_state=random_state
-        ).tolist()
-
-
-class UniformList:
-    def __init__(self, low: float, high: float, size: int):
-        if high <= low:
-            raise ValueError(
-                f"Expected low < high for uniform bounds, got {low}, {high}."
-            )
-        if size <= 0:
-            raise ValueError(f"size must be positive, got {size}.")
-
-        self.low = low
-        self.high = high
-        self.size = size
-
-    def rvs(self, random_state=None):
-        return uniform(self.low, self.high - self.low).rvs(
-            size=self.size, random_state=random_state
-        ).tolist()
+        rng = check_random_state(random_state)
+        return rng.dirichlet(self.alpha).tolist()
 
 
 class CachedRandomSearchCV:
@@ -306,25 +323,25 @@ class StagedRandomSearchResult:
 
     @property
     def final_stage(self):
-        return self.bayesian_stage if self.bayesian_stage is not None else self.stage3
+        return _best_search_stage(
+            [
+                stage
+                for stage in (*self.stages, self.bayesian_stage)
+                if stage is not None
+            ]
+        )
 
     @property
     def best_estimator_(self):
-        if self.bayesian_stage is not None:
-            return self.bayesian_stage.best_estimator_
-        return self.stage3.best_estimator_
+        return self.final_stage.best_estimator_
 
     @property
     def best_params_(self) -> dict:
-        if self.bayesian_stage is not None:
-            return self.bayesian_stage.best_params_
         return self.final_params
 
     @property
     def best_score_(self) -> float:
-        if self.bayesian_stage is not None:
-            return self.bayesian_stage.best_score_
-        return self.stage3.best_score_
+        return float(self.final_stage.best_score_)
 
     @property
     def random_search_history_(self) -> list[dict]:
@@ -343,9 +360,20 @@ class StagedRandomSearchResult:
         if self.bayesian_stage is None:
             return []
 
+        random_history = self.random_search_history_
+        initial_best_score = -np.inf
+        initial_best_validation_error = np.inf
+        if random_history:
+            initial_best_score = random_history[-1]["best_mean_test_score"]
+            initial_best_validation_error = random_history[-1][
+                "best_validation_error"
+            ]
+
         return offset_bayesian_search_history(
             self.bayesian_stage.search_history_,
-            iteration_offset=len(self.random_search_history_),
+            iteration_offset=len(random_history),
+            initial_best_score=initial_best_score,
+            initial_best_validation_error=initial_best_validation_error,
         )
 
 
@@ -511,12 +539,13 @@ def make_param_distributions(
     n_components: int,
     *,
     alpha_bounds: tuple[float, float],
-    gamma_bounds: tuple[float, float],
+    gamma_bounds: tuple[float, float] | list[tuple[float, float]],
     kernel_weight_bounds: tuple[float, float] = (0.0, 1.0),
     prefix: str = "",
     include_alpha: bool = True,
     include_gammas: bool = True,
     include_kernel_weights: bool = True,
+    kernel_weight_distribution=None,
 ) -> dict:
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
@@ -525,63 +554,327 @@ def make_param_distributions(
     if include_alpha:
         param_distributions[f"{prefix}alpha"] = loguniform(*alpha_bounds)
     if include_gammas:
-        param_distributions[f"{prefix}gammas"] = LogUniformList(
-            *gamma_bounds, size=n_components
+        param_distributions[f"{prefix}gammas"] = LogUniformListBounds(
+            _as_component_bounds(gamma_bounds, n_components)
         )
     if include_kernel_weights and n_components > 1:
-        param_distributions[f"{prefix}kernel_weights"] = UniformList(
-            *kernel_weight_bounds, size=n_components
+        _validate_kernel_weight_bounds(kernel_weight_bounds)
+        param_distributions[f"{prefix}kernel_weights"] = (
+            kernel_weight_distribution
+            if kernel_weight_distribution is not None
+            else SimplexWeightDistribution(n_components)
         )
 
     return param_distributions
 
 
-def make_stage_param_distributions(
-    stage: int,
-    n_components: int,
+def estimate_gamma_bounds(
+    estimator,
+    X,
     *,
-    alpha_bounds: tuple[float, float],
-    gamma_bounds: tuple[float, float],
-    kernel_weight_bounds: tuple[float, float] = (0.0, 1.0),
-    prefix: str = "",
-) -> dict:
-    if stage == 1:
-        return make_param_distributions(
-            n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            prefix=prefix,
-            include_alpha=True,
-            include_gammas=False,
-            include_kernel_weights=True,
+    n_components: int,
+    legal_gamma_bounds: tuple[float, float] | list[tuple[float, float]],
+    decades: float,
+    distance_cache=None,
+    dtype: np.dtype | type | str = np.float64,
+    block_size: int = 1024,
+) -> list[tuple[float, float]]:
+    component_legal_bounds = _as_component_bounds(
+        legal_gamma_bounds,
+        n_components,
+    )
+    if decades <= 0:
+        raise ValueError(f"decades must be positive, got {decades}.")
+
+    centers = (
+        _gamma_centers_from_distance_cache(distance_cache, component_legal_bounds)
+        if distance_cache is not None
+        else _gamma_centers_from_full_data(
+            estimator,
+            X,
+            n_components=n_components,
+            legal_gamma_bounds=component_legal_bounds,
+            dtype=dtype,
+            block_size=block_size,
+        )
+    )
+
+    bounds = [
+        _narrow_log_bounds_around(center, legal_bounds, decades)
+        for center, legal_bounds in zip(centers, component_legal_bounds)
+    ]
+    for component_index, (center, bound) in enumerate(zip(centers, bounds), start=1):
+        logger.info(
+            "Component %s gamma prior centered at %.6g with bounds "
+            "[%.6g, %.6g].",
+            component_index,
+            center,
+            bound[0],
+            bound[1],
+        )
+    return bounds
+
+
+def _gamma_centers_from_distance_cache(
+    distance_cache,
+    legal_gamma_bounds: list[tuple[float, float]],
+) -> list[float]:
+    centers = []
+    for component_index, legal_bounds in enumerate(legal_gamma_bounds):
+        medians = []
+        for fold in distance_cache.folds:
+            median = _positive_finite_median(fold.train_distances[component_index])
+            if np.isfinite(median) and median > 0:
+                medians.append(median)
+        centers.append(_gamma_center_from_distance_medians(medians, legal_bounds))
+
+    return centers
+
+
+def _gamma_centers_from_full_data(
+    estimator,
+    X,
+    *,
+    n_components: int,
+    legal_gamma_bounds: list[tuple[float, float]],
+    dtype: np.dtype | type | str,
+    block_size: int,
+) -> list[float]:
+    regressor = extract_regressor(estimator)
+    kernel_types = resolve_sequence(
+        "kernel_types",
+        regressor.kernel_types,
+        n_components,
+        "rbf",
+    )
+    normalizations = resolve_sequence(
+        "normalizations",
+        regressor.normalizations,
+        n_components,
+        "none",
+    )
+    X_blocks = unpack_sample_matrix(X, dtype=dtype)
+    centers = []
+
+    for X_block, normalization, kernel_type, legal_bounds in zip(
+        X_blocks,
+        normalizations,
+        kernel_types,
+        legal_gamma_bounds,
+    ):
+        spec = distance_spec_for_kernel(kernel_type)
+        preprocessor = make_data_preprocessor(normalization)
+        X_block_t = preprocessor.fit_transform(X_block)
+        distances = pairwise_self_lp_distance(
+            X_block_t,
+            p=spec.p,
+            squared=spec.squared,
+            block_size=block_size,
+            dtype=dtype,
+        )
+        median = _positive_finite_median(distances)
+        centers.append(_gamma_center_from_distance_medians([median], legal_bounds))
+
+    return centers
+
+
+def _gamma_center_from_distance_medians(
+    medians: list[float],
+    legal_bounds: tuple[float, float],
+) -> float:
+    medians = np.asarray(medians, dtype=float)
+    medians = medians[np.isfinite(medians) & (medians > 0)]
+    if medians.size == 0:
+        return _geometric_midpoint(legal_bounds)
+
+    center = 1.0 / float(np.median(medians))
+    return float(np.clip(center, legal_bounds[0], legal_bounds[1]))
+
+
+def _positive_finite_median(values, *, max_values: int = 2_000_000) -> float:
+    values = np.asarray(values).ravel()
+    if values.size == 0:
+        return np.nan
+
+    step = max(1, int(np.ceil(values.size / max_values)))
+    sample = values[::step]
+    sample = sample[np.isfinite(sample) & (sample > 0)]
+    if sample.size == 0:
+        return np.nan
+
+    return float(np.median(sample))
+
+
+def _narrow_log_bounds_around(
+    value: float,
+    bounds: tuple[float, float],
+    decades: float,
+) -> tuple[float, float]:
+    low, high = _validate_log_bounds("bounds", bounds)
+    if decades <= 0:
+        raise ValueError(f"decades must be positive, got {decades}.")
+    if not np.isfinite(value) or value <= 0:
+        value = _geometric_midpoint((low, high))
+
+    factor = 10.0 ** decades
+    new_low = max(low, float(value) / factor)
+    new_high = min(high, float(value) * factor)
+    if new_high <= new_low:
+        return low, high
+
+    return new_low, new_high
+
+
+def _top_k_log_bounds(
+    params: list[dict],
+    value_getter,
+    *,
+    legal_bounds: tuple[float, float],
+    padding_decades: float,
+) -> tuple[float, float]:
+    low, high = _validate_log_bounds("legal_bounds", legal_bounds)
+    values = np.asarray([value_getter(param) for param in params], dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if values.size == 0:
+        return low, high
+    if padding_decades <= 0:
+        raise ValueError(
+            f"padding_decades must be positive, got {padding_decades}."
         )
 
-    if stage == 2:
-        return make_param_distributions(
-            n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            prefix=prefix,
-            include_alpha=True,
-            include_gammas=True,
-            include_kernel_weights=False,
+    log_values = np.log10(values)
+    new_low = max(low, 10.0 ** (float(np.min(log_values)) - padding_decades))
+    new_high = min(high, 10.0 ** (float(np.max(log_values)) + padding_decades))
+    if new_high <= new_low:
+        return low, high
+
+    return new_low, new_high
+
+
+def _top_candidate_params(
+    search,
+    *,
+    fraction: float,
+    min_candidates: int,
+) -> list[dict]:
+    if not 0 < fraction <= 1:
+        raise ValueError(f"fraction must be in (0, 1], got {fraction}.")
+    if min_candidates <= 0:
+        raise ValueError(f"min_candidates must be positive, got {min_candidates}.")
+
+    scores = np.asarray(search.cv_results_["mean_test_score"], dtype=float)
+    finite_indices = np.flatnonzero(np.isfinite(scores))
+    if finite_indices.size == 0:
+        return [dict(search.best_params_)]
+
+    n_top = min(
+        finite_indices.size,
+        max(min_candidates, int(np.ceil(finite_indices.size * fraction))),
+    )
+    ordered = finite_indices[np.argsort(scores[finite_indices])]
+    top_indices = ordered[-n_top:]
+    return [dict(search.cv_results_["params"][index]) for index in top_indices]
+
+
+def _average_kernel_weights(
+    params: list[dict],
+    *,
+    key: str,
+    n_components: int,
+) -> np.ndarray:
+    weights = []
+    for param in params:
+        if key in param:
+            weights.append(_normalize_weights(param[key], size=n_components))
+
+    if not weights:
+        return _uniform_weights(n_components)
+
+    return _normalize_weights(np.mean(weights, axis=0), size=n_components)
+
+
+def _as_component_bounds(
+    bounds: tuple[float, float] | list[tuple[float, float]],
+    n_components: int,
+) -> list[tuple[float, float]]:
+    if n_components <= 0:
+        raise ValueError(f"n_components must be positive, got {n_components}.")
+
+    if _looks_like_single_bounds(bounds):
+        low, high = bounds
+        return [_validate_log_bounds("bounds", (low, high))] * n_components
+
+    component_bounds = list(bounds)
+    if len(component_bounds) != n_components:
+        raise ValueError(
+            f"Expected {n_components} component bounds, "
+            f"got {len(component_bounds)}."
         )
 
-    if stage == 3:
-        return make_param_distributions(
-            n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            prefix=prefix,
-            include_alpha=False,
-            include_gammas=True,
-            include_kernel_weights=True,
+    return [
+        _validate_log_bounds("bounds", tuple(component_bounds[index]))
+        for index in range(n_components)
+    ]
+
+
+def _looks_like_single_bounds(bounds) -> bool:
+    if len(bounds) != 2:
+        return False
+    return np.isscalar(bounds[0]) and np.isscalar(bounds[1])
+
+
+def _validate_log_bounds(
+    name: str,
+    bounds: tuple[float, float],
+) -> tuple[float, float]:
+    low, high = bounds
+    low = float(low)
+    high = float(high)
+    if low <= 0 or high <= low:
+        raise ValueError(f"Expected 0 < low < high for {name}, got {bounds}.")
+
+    return low, high
+
+
+def _validate_kernel_weight_bounds(bounds: tuple[float, float]) -> tuple[float, float]:
+    low, high = bounds
+    low = float(low)
+    high = float(high)
+    if low < 0 or high <= low:
+        raise ValueError(
+            "Expected 0 <= low < high for kernel_weight_bounds, "
+            f"got {bounds}."
         )
 
-    raise ValueError(f"stage must be 1, 2, or 3, got {stage}.")
+    return low, high
+
+
+def _normalize_weights(
+    weights,
+    *,
+    size: int,
+    min_value: float = 1e-12,
+) -> np.ndarray:
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape != (size,):
+        raise ValueError(f"Expected {size} weights, got shape {weights.shape}.")
+    weights = np.maximum(weights, min_value)
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 0 or not np.isfinite(weight_sum):
+        return _uniform_weights(size)
+
+    return weights / weight_sum
+
+
+def _uniform_weights(size: int) -> np.ndarray:
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {size}.")
+    return np.full(size, 1.0 / size, dtype=float)
+
+
+def _geometric_midpoint(bounds: tuple[float, float]) -> float:
+    low, high = _validate_log_bounds("bounds", bounds)
+    return float(np.sqrt(low * high))
 
 
 def staged_random_search_cv(
@@ -610,6 +903,14 @@ def staged_random_search_cv(
     distance_dtype: np.dtype | type | str = np.float64,
     distance_cache_n_jobs: int | None = -1,
     distance_cache_memory_fraction: float = 0.80,
+    gamma_prior_decades: float = 2.5,
+    refine_decades: float = 1.0,
+    top_k_fraction: float = 0.20,
+    top_k_min_candidates: int = 3,
+    top_k_padding_decades: float = 0.5,
+    stage3_weight_concentration: float = 25.0,
+    bayesian_refine_decades: float = 0.3,
+    bayesian_weight_logit_radius: float = 1.5,
 ) -> StagedRandomSearchResult:
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
@@ -660,24 +961,38 @@ def staged_random_search_cv(
         time_cache_end = 0.0
         cache_timing_label = "Distance Matrix Pre-Caching (Skipped)"
 
+    component_gamma_bounds = _as_component_bounds(gamma_bounds, n_components)
+    gamma_prior_bounds = estimate_gamma_bounds(
+        estimator,
+        X,
+        n_components=n_components,
+        legal_gamma_bounds=component_gamma_bounds,
+        decades=gamma_prior_decades,
+        distance_cache=distance_cache,
+        dtype=distance_dtype,
+        block_size=distance_block_size,
+    )
+
     stage1_estimator = _clone_with_params(
         estimator,
         prefix=prefix,
-        kernel_weights=[1.0] if n_components == 1 else None,
+        kernel_weights=_uniform_weights(n_components).tolist(),
     )
-    logger.warning(f"Beginning Stage 1 search in joint alpha/kernel_weight space. [{n_iter_stage1} iterations]")
+    logger.warning(
+        "Beginning Stage 1 broad alpha/gamma scale search with equal "
+        f"weights. [{n_iter_stage1} iterations]"
+    )
     time_stage1_start:float = perf_counter()
     stage1 = _fit_search(
         stage1_estimator,
         X,
         y,
-        param_distributions=make_stage_param_distributions(
-            1,
+        param_distributions=make_param_distributions(
             n_components,
             alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
+            gamma_bounds=gamma_prior_bounds,
             prefix=prefix,
+            include_kernel_weights=False,
         ),
         n_iter=n_iter_stage1,
         scoring=scoring,
@@ -690,28 +1005,37 @@ def staged_random_search_cv(
     )
     time_stage1_end:float = perf_counter()
     time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
-    stage1_weights = (
-        [1.0]
-        if n_components == 1
-        else _best_param(stage1, prefix, "kernel_weights")
-    )
 
-    stage2_estimator = _clone_with_params(
-        estimator,
-        prefix=prefix,
-        kernel_weights=stage1_weights,
+    stage1_best_params = _complete_unprefixed_params_from_estimator(
+        stage1.best_estimator_,
+        n_components=n_components,
     )
-    logger.warning(f"Beginning Stage 2 search in joint alpha/gamma space. [{n_iter_stage2} iterations]")
+    stage2_alpha_bounds = _narrow_log_bounds_around(
+        stage1_best_params["alpha"],
+        alpha_bounds,
+        refine_decades,
+    )
+    stage2_gamma_bounds = [
+        _narrow_log_bounds_around(gamma, legal_bounds, refine_decades)
+        for gamma, legal_bounds in zip(
+            stage1_best_params["gammas"],
+            component_gamma_bounds,
+        )
+    ]
+
+    logger.warning(
+        "Beginning Stage 2 local alpha/gamma search with simplex weights. "
+        f"[{n_iter_stage2} iterations]"
+    )
     time_stage2_start:float = perf_counter()
     stage2 = _fit_search(
-        stage2_estimator,
+        estimator,
         X,
         y,
-        param_distributions=make_stage_param_distributions(
-            2,
+        param_distributions=make_param_distributions(
             n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
+            alpha_bounds=stage2_alpha_bounds,
+            gamma_bounds=stage2_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
             prefix=prefix,
         ),
@@ -727,25 +1051,56 @@ def staged_random_search_cv(
     time_stage2_end:float = perf_counter()
     time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
 
-    stage3_estimator = _clone_with_params(
-        estimator,
-        prefix=prefix,
-        alpha=_best_param(stage2, prefix, "alpha"),
-        kernel_weights=[1.0] if n_components == 1 else None,
+    stage2_top_params = _top_candidate_params(
+        stage2,
+        fraction=top_k_fraction,
+        min_candidates=top_k_min_candidates,
     )
-    logger.warning(f"Beginning Stage 3 search in joint gamma/kernel_weight space. [{n_iter_stage3} iterations]")
+    stage3_alpha_bounds = _top_k_log_bounds(
+        stage2_top_params,
+        lambda params: params[f"{prefix}alpha"],
+        legal_bounds=alpha_bounds,
+        padding_decades=top_k_padding_decades,
+    )
+    stage3_gamma_bounds = [
+        _top_k_log_bounds(
+            stage2_top_params,
+            lambda params, component_index=component_index: (
+                params[f"{prefix}gammas"][component_index]
+            ),
+            legal_bounds=component_gamma_bounds[component_index],
+            padding_decades=top_k_padding_decades,
+        )
+        for component_index in range(n_components)
+    ]
+    stage3_weight_distribution = None
+    if n_components > 1:
+        stage3_weight_distribution = SimplexWeightDistribution(
+            n_components,
+            center=_average_kernel_weights(
+                stage2_top_params,
+                key=f"{prefix}kernel_weights",
+                n_components=n_components,
+            ),
+            concentration=stage3_weight_concentration,
+        )
+
+    logger.warning(
+        "Beginning Stage 3 top-k alpha/gamma refinement with centered "
+        f"simplex weights. [{n_iter_stage3} iterations]"
+    )
     time_stage3_start:float = perf_counter()
     stage3 = _fit_search(
-        stage3_estimator,
+        estimator,
         X,
         y,
-        param_distributions=make_stage_param_distributions(
-            3,
+        param_distributions=make_param_distributions(
             n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
+            alpha_bounds=stage3_alpha_bounds,
+            gamma_bounds=stage3_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
             prefix=prefix,
+            kernel_weight_distribution=stage3_weight_distribution,
         ),
         n_iter=n_iter_stage3,
         scoring=scoring,
@@ -759,15 +1114,12 @@ def staged_random_search_cv(
     time_stage3_end:float = perf_counter()
     time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
 
-    final_params = {
-        f"{prefix}alpha": _best_param(stage2, prefix, "alpha"),
-        f"{prefix}gammas": _best_param(stage3, prefix, "gammas"),
-        f"{prefix}kernel_weights": (
-            [1.0]
-            if n_components == 1
-            else _best_param(stage3, prefix, "kernel_weights")
-        ),
-    }
+    best_random_stage = _best_search_stage([stage1, stage2, stage3])
+    final_params = _complete_prefixed_params_from_estimator(
+        best_random_stage.best_estimator_,
+        prefix=prefix,
+        n_components=n_components,
+    )
 
     timings = [
         (time_cache_start, time_cache_end, cache_timing_label),
@@ -788,15 +1140,35 @@ def staged_random_search_cv(
 
     bayesian_stage = None
     if n_trials_bayesian is not None and n_trials_bayesian > 0:
-        logger.warning(f"Now entering final stage: Bayesian search over all hyperparameters [{n_trials_bayesian} iterations]")
+        best_random_params = _complete_unprefixed_params_from_estimator(
+            best_random_stage.best_estimator_,
+            n_components=n_components,
+        )
+        bayesian_alpha_bounds = _narrow_log_bounds_around(
+            best_random_params["alpha"],
+            alpha_bounds,
+            bayesian_refine_decades,
+        )
+        bayesian_gamma_bounds = [
+            _narrow_log_bounds_around(gamma, legal_bounds, bayesian_refine_decades)
+            for gamma, legal_bounds in zip(
+                best_random_params["gammas"],
+                component_gamma_bounds,
+            )
+        ]
+
+        logger.warning(
+            "Now entering final stage: local Bayesian search over all "
+            f"hyperparameters. [{n_trials_bayesian} iterations]"
+        )
         time_bayes_start:float = perf_counter()
         bayesian_stage = fit_bayesian_search(
             estimator,
             X,
             y,
             n_components=n_components,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_bounds,
+            alpha_bounds=bayesian_alpha_bounds,
+            gamma_bounds=bayesian_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
             initial_params=final_params,
             scoring=scoring,
@@ -809,6 +1181,8 @@ def staged_random_search_cv(
             prefix=prefix,
             stage_name="Bayesian search",
             distance_cache=distance_cache,
+            kernel_weight_center=best_random_params["kernel_weights"],
+            kernel_weight_logit_radius=bayesian_weight_logit_radius,
         )
         time_bayes_end:float = perf_counter()
         time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
@@ -820,6 +1194,24 @@ def staged_random_search_cv(
             (time_stage3_start, time_stage3_end, "Training: Stage III"),
             (time_bayes_start , time_bayes_end , "Training: Stage IV"),
         ]
+
+    selected_stage = _best_search_stage(
+        [
+            stage
+            for stage in (stage1, stage2, stage3, bayesian_stage)
+            if stage is not None
+        ]
+    )
+    final_params = _complete_prefixed_params_from_estimator(
+        selected_stage.best_estimator_,
+        prefix=prefix,
+        n_components=n_components,
+    )
+    logger.info(
+        "Selected %s as final model with CV score %.6g.",
+        getattr(selected_stage, "stage_name", "Bayesian search"),
+        selected_stage.best_score_,
+    )
 
     return StagedRandomSearchResult(
         stage1=stage1,
@@ -998,5 +1390,45 @@ def _clone_with_params(estimator, *, prefix: str, **params):
     return cloned
 
 
-def _best_param(search: RandomizedSearchCV, prefix: str, name: str):
-    return search.best_params_[f"{prefix}{name}"]
+def _best_search_stage(stages):
+    if not stages:
+        raise ValueError("At least one search stage is required.")
+
+    finite_stages = [
+        stage
+        for stage in stages
+        if np.isfinite(float(getattr(stage, "best_score_", -np.inf)))
+    ]
+    if not finite_stages:
+        raise ValueError("No search stage has a finite best CV score.")
+
+    return max(finite_stages, key=lambda stage: float(stage.best_score_))
+
+
+def _complete_prefixed_params_from_estimator(
+    estimator,
+    *,
+    prefix: str,
+    n_components: int,
+) -> dict:
+    params = _complete_unprefixed_params_from_estimator(
+        estimator,
+        n_components=n_components,
+    )
+    return {f"{prefix}{name}": value for name, value in params.items()}
+
+
+def _complete_unprefixed_params_from_estimator(estimator, *, n_components: int) -> dict:
+    regressor = extract_regressor(estimator)
+    alpha, gammas, weights = resolve_kernel_hyperparameters(
+        regressor,
+        n_components=n_components,
+    )
+    return {
+        "alpha": float(alpha),
+        "gammas": [float(value) for value in np.asarray(gammas, dtype=float)],
+        "kernel_weights": [
+            float(value)
+            for value in np.asarray(weights, dtype=float)
+        ],
+    }

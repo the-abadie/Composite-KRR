@@ -51,3 +51,17 @@ def validate_config() -> None:
         raise ValueError("`KRR_DISTANCE_CACHE_MEMORY_FRACTION` must be numeric.")
     if not 0 < config.KRR_DISTANCE_CACHE_MEMORY_FRACTION <= 1:
         raise ValueError("`KRR_DISTANCE_CACHE_MEMORY_FRACTION` must be in (0, 1].")
+
+    if not (
+        isinstance(config.KRR_TOP_K_FRACTION, float)
+        or isinstance(config.KRR_TOP_K_FRACTION, int)
+    ):
+        raise ValueError("`KRR_TOP_K_FRACTION` must be numeric.")
+    if not 0 < config.KRR_TOP_K_FRACTION <= 1:
+        raise ValueError("`KRR_TOP_K_FRACTION` must be in (0, 1].")
+
+    if (
+        type(config.KRR_TOP_K_MIN_CANDIDATES) is not int
+        or config.KRR_TOP_K_MIN_CANDIDATES <= 0
+    ):
+        raise ValueError("`KRR_TOP_K_MIN_CANDIDATES` must be a positive int.")
