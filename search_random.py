@@ -1190,6 +1190,7 @@ def staged_random_search_cv(
             cv=cv,
             random_state=random_state,
             n_jobs=n_jobs,
+            blas_threads=random_search_blas_threads,
             timeout=bayesian_timeout,
             patience=bayesian_patience,
             n_trials=n_trials_bayesian,

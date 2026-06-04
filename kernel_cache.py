@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from contextlib import nullcontext
 import logging
 import os
 import platform
@@ -41,6 +42,24 @@ class FoldDistanceCache:
     y_train_transformed: NDArray
     y_validation: NDArray
     target_transformer: object | None
+
+
+@dataclass(frozen=True)
+class _FoldDistanceMetadata:
+    fold_id: int
+    train_indices: NDArray
+    validation_indices: NDArray
+    y_train_transformed: NDArray
+    y_validation: NDArray
+    target_transformer: object | None
+
+
+@dataclass(frozen=True)
+class _ComponentFoldDistanceCache:
+    fold_index: int
+    component_index: int
+    train_distance: NDArray
+    validation_train_distance: NDArray
 
 
 @dataclass(frozen=True)
@@ -136,7 +155,22 @@ def build_distance_cache(
         memory_fraction=memory_fraction,
     )
 
-    cache_n_jobs = resolve_cache_n_jobs(n_jobs, n_folds=len(fold_indices))
+    fold_metadata = [
+        build_fold_distance_metadata(
+            fold_id=fold_id,
+            train_idx=train_idx,
+            validation_idx=validation_idx,
+            y=y,
+            target_transformer=target_transformer,
+            dtype=dtype,
+        )
+        for fold_id, (train_idx, validation_idx) in enumerate(
+            fold_indices,
+            start=1,
+        )
+    ]
+    n_cache_tasks = len(fold_metadata) * len(X_blocks)
+    cache_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=n_cache_tasks)
     logger.info(
         "Estimated distance cache memory: %.2f MiB.",
         estimated_nbytes / (1024**2),
@@ -149,52 +183,58 @@ def build_distance_cache(
             100 * memory_fraction,
         )
     logger.info(
-        "Precomputing %s fold distance cache with %s worker thread(s).",
-        len(fold_indices),
+        "Precomputing %s fold x %s descriptor distance cache with "
+        "%s worker thread(s).",
+        len(fold_metadata),
+        len(X_blocks),
         cache_n_jobs,
     )
 
     if cache_n_jobs == 1:
-        folds = [
-            build_fold_distance_cache(
-                fold_id=fold_id,
-                train_idx=train_idx,
-                validation_idx=validation_idx,
-                X_blocks=X_blocks,
-                y=y,
-                specs=specs,
-                normalizations=normalizations,
-                target_transformer=target_transformer,
+        component_results = [
+            build_component_fold_distance_cache(
+                fold_index=fold_index,
+                component_index=component_index,
+                train_idx=metadata.train_indices,
+                validation_idx=metadata.validation_indices,
+                X_block=X_block,
+                normalization=normalization,
+                spec=spec,
                 block_size=block_size,
                 dtype=dtype,
                 use_scipy_for_p1_p2=use_scipy_for_p1_p2,
             )
-            for fold_id, (train_idx, validation_idx) in enumerate(
-                fold_indices,
-                start=1,
+            for fold_index, metadata in enumerate(fold_metadata)
+            for component_index, (X_block, normalization, spec) in enumerate(
+                zip(X_blocks, normalizations, specs)
             )
         ]
     else:
         with threadpool_limits(limits=1):
-            folds = Parallel(n_jobs=cache_n_jobs, prefer="threads")(
-                delayed(build_fold_distance_cache)(
-                    fold_id=fold_id,
-                    train_idx=train_idx,
-                    validation_idx=validation_idx,
-                    X_blocks=X_blocks,
-                    y=y,
-                    specs=specs,
-                    normalizations=normalizations,
-                    target_transformer=target_transformer,
+            component_results = Parallel(n_jobs=cache_n_jobs, prefer="threads")(
+                delayed(build_component_fold_distance_cache)(
+                    fold_index=fold_index,
+                    component_index=component_index,
+                    train_idx=metadata.train_indices,
+                    validation_idx=metadata.validation_indices,
+                    X_block=X_block,
+                    normalization=normalization,
+                    spec=spec,
                     block_size=block_size,
                     dtype=dtype,
                     use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                 )
-                for fold_id, (train_idx, validation_idx) in enumerate(
-                    fold_indices,
-                    start=1,
+                for fold_index, metadata in enumerate(fold_metadata)
+                for component_index, (X_block, normalization, spec) in enumerate(
+                    zip(X_blocks, normalizations, specs)
                 )
             )
+
+    folds = assemble_fold_distance_caches(
+        fold_metadata,
+        component_results,
+        n_components=len(X_blocks),
+    )
 
     cache = DistanceCache(
         folds=folds,
@@ -214,6 +254,113 @@ def build_distance_cache(
     return cache
 
 
+def build_fold_distance_metadata(
+    *,
+    fold_id: int,
+    train_idx: NDArray,
+    validation_idx: NDArray,
+    y: NDArray,
+    target_transformer,
+    dtype: np.dtype,
+) -> _FoldDistanceMetadata:
+    target_transformer_fold, y_train_transformed = fit_target_transformer(
+        target_transformer,
+        y[train_idx],
+    )
+
+    return _FoldDistanceMetadata(
+        fold_id=fold_id,
+        train_indices=train_idx,
+        validation_indices=validation_idx,
+        y_train_transformed=np.asarray(y_train_transformed, dtype=dtype),
+        y_validation=np.asarray(y[validation_idx], dtype=dtype),
+        target_transformer=target_transformer_fold,
+    )
+
+
+def build_component_fold_distance_cache(
+    *,
+    fold_index: int,
+    component_index: int,
+    train_idx: NDArray,
+    validation_idx: NDArray,
+    X_block: NDArray,
+    normalization: str,
+    spec: KernelDistanceSpec,
+    block_size: int,
+    dtype: np.dtype,
+    use_scipy_for_p1_p2: bool,
+) -> _ComponentFoldDistanceCache:
+    preprocessor = make_data_preprocessor(normalization)
+    X_train = preprocessor.fit_transform(X_block[train_idx])
+    X_validation = preprocessor.transform(X_block[validation_idx])
+
+    return _ComponentFoldDistanceCache(
+        fold_index=fold_index,
+        component_index=component_index,
+        train_distance=pairwise_self_lp_distance(
+            X_train,
+            p=spec.p,
+            squared=spec.squared,
+            block_size=block_size,
+            dtype=dtype,
+            use_scipy_for_p1_p2=use_scipy_for_p1_p2,
+        ),
+        validation_train_distance=pairwise_cross_lp_distance(
+            X_validation,
+            X_train,
+            p=spec.p,
+            squared=spec.squared,
+            block_size=block_size,
+            dtype=dtype,
+            use_scipy_for_p1_p2=use_scipy_for_p1_p2,
+        ),
+    )
+
+
+def assemble_fold_distance_caches(
+    fold_metadata: list[_FoldDistanceMetadata],
+    component_results: list[_ComponentFoldDistanceCache],
+    *,
+    n_components: int,
+) -> list[FoldDistanceCache]:
+    result_by_key = {
+        (result.fold_index, result.component_index): result
+        for result in component_results
+    }
+
+    folds = []
+    for fold_index, metadata in enumerate(fold_metadata):
+        train_distances = []
+        validation_train_distances = []
+        for component_index in range(n_components):
+            try:
+                result = result_by_key[(fold_index, component_index)]
+            except KeyError as exc:
+                raise RuntimeError(
+                    "Missing distance cache result for "
+                    f"fold {metadata.fold_id}, descriptor {component_index}."
+                ) from exc
+
+            train_distances.append(result.train_distance)
+            validation_train_distances.append(result.validation_train_distance)
+
+        folds.append(
+            FoldDistanceCache(
+                fold_id=metadata.fold_id,
+                train_indices=metadata.train_indices,
+                validation_indices=metadata.validation_indices,
+                train_distances=train_distances,
+                validation_train_distances=validation_train_distances,
+                y_train_transformed=metadata.y_train_transformed,
+                y_validation=metadata.y_validation,
+                target_transformer=metadata.target_transformer,
+            )
+        )
+
+    return folds
+
+
 def build_fold_distance_cache(
     *,
     fold_id: int,
@@ -228,52 +375,38 @@ def build_fold_distance_cache(
     dtype: np.dtype,
     use_scipy_for_p1_p2: bool,
 ) -> FoldDistanceCache:
-    target_transformer_fold, y_train_transformed = fit_target_transformer(
-        target_transformer,
-        y[train_idx],
-    )
-    y_train_transformed = np.asarray(y_train_transformed, dtype=dtype)
-
-    train_distances = []
-    validation_train_distances = []
-
-    for X_block, normalization, spec in zip(X_blocks, normalizations, specs):
-        preprocessor = make_data_preprocessor(normalization)
-        X_train = preprocessor.fit_transform(X_block[train_idx])
-        X_validation = preprocessor.transform(X_block[validation_idx])
-
-        train_distances.append(
-            pairwise_self_lp_distance(
-                X_train,
-                p=spec.p,
-                squared=spec.squared,
-                block_size=block_size,
-                dtype=dtype,
-                use_scipy_for_p1_p2=use_scipy_for_p1_p2,
-            )
-        )
-        validation_train_distances.append(
-            pairwise_cross_lp_distance(
-                X_validation,
-                X_train,
-                p=spec.p,
-                squared=spec.squared,
-                block_size=block_size,
-                dtype=dtype,
-                use_scipy_for_p1_p2=use_scipy_for_p1_p2,
-            )
-        )
-
-    return FoldDistanceCache(
+    metadata = build_fold_distance_metadata(
         fold_id=fold_id,
-        train_indices=train_idx,
-        validation_indices=validation_idx,
-        train_distances=train_distances,
-        validation_train_distances=validation_train_distances,
-        y_train_transformed=y_train_transformed,
-        y_validation=np.asarray(y[validation_idx], dtype=dtype),
-        target_transformer=target_transformer_fold,
+        train_idx=train_idx,
+        validation_idx=validation_idx,
+        y=y,
+        target_transformer=target_transformer,
+        dtype=dtype,
     )
+
+    component_results = [
+        build_component_fold_distance_cache(
+            fold_index=0,
+            component_index=component_index,
+            train_idx=train_idx,
+            validation_idx=validation_idx,
+            X_block=X_block,
+            normalization=normalization,
+            spec=spec,
+            block_size=block_size,
+            dtype=dtype,
+            use_scipy_for_p1_p2=use_scipy_for_p1_p2,
+        )
+        for component_index, (X_block, normalization, spec) in enumerate(
+            zip(X_blocks, normalizations, specs)
+        )
+    ]
+
+    return assemble_fold_distance_caches(
+        [metadata],
+        component_results,
+        n_components=len(X_blocks),
+    )[0]
 
 
 def estimate_distance_cache_nbytes(
@@ -325,16 +458,23 @@ def validate_distance_cache_memory(
     )
 
 
-def resolve_cache_n_jobs(n_jobs: int | None, *, n_folds: int) -> int:
-    if n_folds <= 0:
-        raise ValueError("At least one CV fold is required to build a distance cache.")
+def resolve_cache_n_jobs(
+    n_jobs: int | None,
+    *,
+    n_tasks: int | None = None,
+    n_folds: int | None = None,
+) -> int:
+    if n_tasks is None:
+        n_tasks = n_folds
+    if n_tasks is None or n_tasks <= 0:
+        raise ValueError("At least one task is required to build a distance cache.")
 
     if n_jobs is None:
         requested = effective_n_jobs(-1)
     else:
         requested = effective_n_jobs(n_jobs)
 
-    return max(1, min(n_folds, requested))
+    return max(1, min(n_tasks, requested))
 
 
 def available_memory_bytes() -> int | None:
@@ -447,6 +587,8 @@ def cached_cross_val_scores(
     cache: DistanceCache,
     *,
     scoring,
+    n_jobs: int | None = None,
+    blas_threads: int | None = None,
 ) -> NDArray:
     candidate = clone(estimator)
     if params:
@@ -458,17 +600,38 @@ def cached_cross_val_scores(
         n_components=cache.n_components,
     )
 
-    scores = [
-        score_fold_from_distances(
-            fold,
-            alpha=alpha,
-            gammas=gammas,
-            weights=weights,
-            scoring=scoring,
-            kernel_types=cache.kernel_types,
+    if n_jobs in (None, 1) or len(cache.folds) == 1:
+        scores = [
+            score_fold_from_distances(
+                fold,
+                alpha=alpha,
+                gammas=gammas,
+                weights=weights,
+                scoring=scoring,
+                kernel_types=cache.kernel_types,
+            )
+            for fold in cache.folds
+        ]
+        return np.asarray(scores, dtype=float)
+
+    score_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=len(cache.folds))
+    threadpool_context = (
+        nullcontext()
+        if blas_threads is None
+        else threadpool_limits(limits=blas_threads)
+    )
+    with threadpool_context:
+        scores = Parallel(n_jobs=score_n_jobs, prefer="threads")(
+            delayed(score_fold_from_distances)(
+                fold,
+                alpha=alpha,
+                gammas=gammas,
+                weights=weights,
+                scoring=scoring,
+                kernel_types=cache.kernel_types,
+            )
+            for fold in cache.folds
         )
-        for fold in cache.folds
-    ]
     return np.asarray(scores, dtype=float)
 
 

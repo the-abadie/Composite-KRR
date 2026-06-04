@@ -45,6 +45,7 @@ def fit_bayesian_search(
     cv,
     random_state=None,
     n_jobs=None,
+    blas_threads: int | None = 1,
     timeout: float | None = None,
     patience: int | None = None,
     n_trials: int,
@@ -117,6 +118,8 @@ def fit_bayesian_search(
                     _prefix_params(params, prefix),
                     distance_cache,
                     scoring=scoring,
+                    n_jobs=n_jobs,
+                    blas_threads=blas_threads,
                 )
             except LinAlgError:
                 return -np.inf

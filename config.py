@@ -3,11 +3,20 @@ VERBOSITY = 2
 
 RUN_NAME = "QM7_TESTING"
 
-X_PATHS = ["sample/QM7/QM7_overlap_0.npy", "sample/QM7/QM7_overlap_1.npy",
-           "sample/QM7/QM7_overlap_2.npy", "sample/QM7/QM7_overlap_3.npy", "sample/QM7/QM7_overlap_4.npy"]
+X_PATHS = ["sample/QM7/QM7_overlap_0.npy",
+           "sample/QM7/QM7_overlap_1.npy", "sample/QM7/QM7_overlap_2.npy",
+           #"sample/QM7/QM7_overlap_3.npy", "sample/QM7/QM7_overlap_4.npy"
+           ]
 # X_NAMES = ["5-component overlap"]
-X_NAMES = ["1B", "2Bs", "2Ba", "3Bs", "3Ba"]
-X_NORMS = ["standard", "standard", "standard", "standard", "standard"]
+X_NAMES = ["1B",
+           "2Bs", "2Ba",
+           #"3Bs", "3Ba"
+           ]
+
+X_NORMS = ["standard",
+           "standard", "standard",
+           #"standard", "standard"
+           ]
 
 Y_PATH = "sample/QM7/atomization_energy.npy"
 Y_NAME = "atomization energy"
@@ -36,13 +45,13 @@ KRR_EVALUATE_KERNEL_CONTRIBUTIONS = True
 KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS = None
 
 # None follows sklearn's default; -1 uses all available cores.
-KRR_RANDOM_SEARCH_N_JOBS = -1
-KRR_RANDOM_SEARCH_BLAS_THREADS = 1
+KRR_RANDOM_SEARCH_N_JOBS = 12
+KRR_RANDOM_SEARCH_BLAS_THREADS = 2
 KRR_COMPUTE_DTYPE = "float64"
 KRR_USE_DISTANCE_CACHE = True
 KRR_DISTANCE_BLOCK_SIZE = 2048
 KRR_DISTANCE_CACHE_DTYPE = KRR_COMPUTE_DTYPE
-KRR_DISTANCE_CACHE_N_JOBS = -1
+KRR_DISTANCE_CACHE_N_JOBS = 5
 KRR_DISTANCE_CACHE_MEMORY_FRACTION = 0.80
 KRR_BAYESIAN_SEARCH_TRIALS = 100
 KRR_BAYESIAN_SEARCH_TIMEOUT = None

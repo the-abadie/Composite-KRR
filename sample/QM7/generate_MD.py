@@ -14,13 +14,13 @@ BOHR_TO_ANGSTROM = 0.529177210903
 
 # region User Parameters
 DB:str = "QM7"
-DISTRIBUTION_PATH = "sample/QM7/RCD_3.0_300.npy"
+DISTRIBUTION_PATH = "RCD_3.0_300.npy"
 distribution_length:int = len(DISTRIBUTION_PATH[0])
-MOL_PATH = f"sample/{DB}/{DB}.xyz"
+MOL_PATH = f"{DB}.xyz"
 
-OUTPUT_FILE = f"sample/{DB}/{DB}_overlap.npy"
+OUTPUT_FILE = f"{DB}_overlap.npy"
 
-N_CORES = 4
+N_CORES = 16
 RESOLUTION = 0
 VERBOSE = 1
 XYZ_UNITS = "bohr"
