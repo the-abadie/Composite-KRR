@@ -29,10 +29,10 @@ def make_target_preprocessor(transform: str):
         logger.debug("Target Transform: log1p")
         return FunctionTransformer(func=np.log1p, inverse_func=np.expm1, validate=False)
     if transform == "standard":
-        logger.debug("Target Transform: StandardScaler")
+        # logger.debug("Target Transform: StandardScaler")
         return StandardScaler()
     if transform == "log_standard":
-        logger.debug("Target Transform: logStandardScaler")
+        # logger.debug("Target Transform: logStandardScaler")
         return Pipeline(
             [
                 (
@@ -45,7 +45,7 @@ def make_target_preprocessor(transform: str):
             ]
         )
     if transform == "log1p_standard":
-        logger.info("Target Transform: log1pStandardScaler")
+        # logger.info("Target Transform: log1pStandardScaler")
         return Pipeline(
             [
                 (
@@ -62,7 +62,7 @@ def make_target_preprocessor(transform: str):
 
 def make_data_preprocessor(transform: str):
     if transform == "none" or transform == "passthrough":
-        logger.debug("Data Preprocesor: none")
+        # logger.debug("Data Preprocesor: none")
         return FunctionTransformer(
             func=_identity, inverse_func=_identity, validate=False
         )
@@ -70,7 +70,7 @@ def make_data_preprocessor(transform: str):
         # logger.debug("Data Preprocesor: StandardScaler")
         return StandardScaler()
     if transform == "log_standard":
-        logger.debug("Data Preprocesor: logStandardScaler")
+        # logger.debug("Data Preprocesor: logStandardScaler")
         log1p = FunctionTransformer(
             np.log1p,
             feature_names_out="one-to-one",

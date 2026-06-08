@@ -323,14 +323,18 @@ def _threadpool_limits_for_blas(blas_threads: int | None):
 class StagedRandomSearchResult:
     stage1: object
     stage2: object
-    stage3: object
+    stage3: object | None
     final_params: dict
     timings: list[tuple[float, float, str]]
     bayesian_stage: BayesianSearchResult | None = None
 
     @property
-    def stages(self) -> tuple[object, object, object]:
-        return self.stage1, self.stage2, self.stage3
+    def stages(self) -> tuple[object, ...]:
+        return tuple(
+            stage
+            for stage in (self.stage1, self.stage2, self.stage3)
+            if stage is not None
+        )
 
     @property
     def final_stage(self):
@@ -927,13 +931,11 @@ def staged_random_search_cv(
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
 
-    for stage, n_iter in {
-        1: n_iter_stage1,
-        2: n_iter_stage2,
-        3: n_iter_stage3,
-    }.items():
+    for stage, n_iter in {1: n_iter_stage1, 2: n_iter_stage2}.items():
         if n_iter <= 0:
             raise ValueError(f"n_iter_stage{stage} must be positive, got {n_iter}.")
+    if n_iter_stage3 < 0:
+        raise ValueError(f"n_iter_stage3 must be non-negative, got {n_iter_stage3}.")
     if n_trials_bayesian is not None and n_trials_bayesian < 0:
         raise ValueError(
             f"n_trials_bayesian must be non-negative, got {n_trials_bayesian}."
@@ -1065,69 +1067,77 @@ def staged_random_search_cv(
     time_stage2_end:float = perf_counter()
     time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
 
-    stage2_top_params = _top_candidate_params(
-        stage2,
-        fraction=top_k_fraction,
-        min_candidates=top_k_min_candidates,
-    )
-    stage3_alpha_bounds = _top_k_log_bounds(
-        stage2_top_params,
-        lambda params: params[f"{prefix}alpha"],
-        legal_bounds=alpha_bounds,
-        padding_decades=top_k_padding_decades,
-    )
-    stage3_gamma_bounds = [
-        _top_k_log_bounds(
+    if n_iter_stage3 > 0:
+        stage2_top_params = _top_candidate_params(
+            stage2,
+            fraction=top_k_fraction,
+            min_candidates=top_k_min_candidates,
+        )
+        stage3_alpha_bounds = _top_k_log_bounds(
             stage2_top_params,
-            lambda params, component_index=component_index: (
-                params[f"{prefix}gammas"][component_index]
-            ),
-            legal_bounds=component_gamma_bounds[component_index],
+            lambda params: params[f"{prefix}alpha"],
+            legal_bounds=alpha_bounds,
             padding_decades=top_k_padding_decades,
         )
-        for component_index in range(n_components)
-    ]
-    stage3_weight_distribution = None
-    if n_components > 1:
-        stage3_weight_distribution = SimplexWeightDistribution(
-            n_components,
-            center=_average_kernel_weights(
+        stage3_gamma_bounds = [
+            _top_k_log_bounds(
                 stage2_top_params,
-                key=f"{prefix}kernel_weights",
-                n_components=n_components,
-            ),
-            concentration=stage3_weight_concentration,
-        )
+                lambda params, component_index=component_index: (
+                    params[f"{prefix}gammas"][component_index]
+                ),
+                legal_bounds=component_gamma_bounds[component_index],
+                padding_decades=top_k_padding_decades,
+            )
+            for component_index in range(n_components)
+        ]
+        stage3_weight_distribution = None
+        if n_components > 1:
+            stage3_weight_distribution = SimplexWeightDistribution(
+                n_components,
+                center=_average_kernel_weights(
+                    stage2_top_params,
+                    key=f"{prefix}kernel_weights",
+                    n_components=n_components,
+                ),
+                concentration=stage3_weight_concentration,
+            )
 
-    logger.warning(
-        "Beginning Stage 3 top-k alpha/gamma refinement with centered "
-        f"simplex weights. [{n_iter_stage3} iterations]"
-    )
-    time_stage3_start:float = perf_counter()
-    stage3 = _fit_search(
-        estimator,
-        X,
-        y,
-        param_distributions=make_param_distributions(
-            n_components,
-            alpha_bounds=stage3_alpha_bounds,
-            gamma_bounds=stage3_gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            prefix=prefix,
-            kernel_weight_distribution=stage3_weight_distribution,
-        ),
-        n_iter=n_iter_stage3,
-        scoring=scoring,
-        cv=cv,
-        random_state=random_state,
-        n_jobs=n_jobs,
-        blas_threads=random_search_blas_threads,
-        refit=refit,
-        stage_name="Stage 3",
-        distance_cache=distance_cache,
-    )
-    time_stage3_end:float = perf_counter()
-    time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
+        logger.warning(
+            "Beginning Stage 3 top-k alpha/gamma refinement with centered "
+            f"simplex weights. [{n_iter_stage3} iterations]"
+        )
+        time_stage3_start:float = perf_counter()
+        stage3 = _fit_search(
+            estimator,
+            X,
+            y,
+            param_distributions=make_param_distributions(
+                n_components,
+                alpha_bounds=stage3_alpha_bounds,
+                gamma_bounds=stage3_gamma_bounds,
+                kernel_weight_bounds=kernel_weight_bounds,
+                prefix=prefix,
+                kernel_weight_distribution=stage3_weight_distribution,
+            ),
+            n_iter=n_iter_stage3,
+            scoring=scoring,
+            cv=cv,
+            random_state=random_state,
+            n_jobs=n_jobs,
+            blas_threads=random_search_blas_threads,
+            refit=refit,
+            stage_name="Stage 3",
+            distance_cache=distance_cache,
+        )
+        time_stage3_end:float = perf_counter()
+        time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
+        stage3_timing_label = "Training: Stage III"
+    else:
+        logger.warning("Skipping Stage 3 because n_iter_stage3 is 0.")
+        time_stage3_start = 0.0
+        time_stage3_end = 0.0
+        stage3 = None
+        stage3_timing_label = "Training: Stage III (Skipped)"
 
     best_random_stage = _best_search_stage([stage1, stage2, stage3])
     final_params = _complete_prefixed_params_from_estimator(
@@ -1140,7 +1150,7 @@ def staged_random_search_cv(
         (time_cache_start, time_cache_end, cache_timing_label),
         (time_stage1_start, time_stage1_end, "Training: Stage I"),
         (time_stage2_start, time_stage2_end, "Training: Stage II"),
-        (time_stage3_start, time_stage3_end, "Training: Stage III"),
+        (time_stage3_start, time_stage3_end, stage3_timing_label),
         (0., 0., "Training: Stage IV (Skipped)"),
     ]
 
@@ -1207,7 +1217,7 @@ def staged_random_search_cv(
             (time_cache_start, time_cache_end, cache_timing_label),
             (time_stage1_start, time_stage1_end, "Training: Stage I"),
             (time_stage2_start, time_stage2_end, "Training: Stage II"),
-            (time_stage3_start, time_stage3_end, "Training: Stage III"),
+            (time_stage3_start, time_stage3_end, stage3_timing_label),
             (time_bayes_start , time_bayes_end , "Training: Stage IV"),
         ]
 

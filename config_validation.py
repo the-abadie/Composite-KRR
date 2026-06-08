@@ -27,6 +27,17 @@ def validate_config() -> None:
     ):
         raise ValueError("`KRR_DISTANCE_BLOCK_SIZE` must be a positive int.")
 
+    for name in ("KRR_RANDOM_SEARCH_STAGE1", "KRR_RANDOM_SEARCH_STAGE2"):
+        value = getattr(config, name)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"`{name}` must be a positive int.")
+
+    if (
+        type(config.KRR_RANDOM_SEARCH_STAGE3) is not int
+        or config.KRR_RANDOM_SEARCH_STAGE3 < 0
+    ):
+        raise ValueError("`KRR_RANDOM_SEARCH_STAGE3` must be a non-negative int.")
+
     try:
         np.dtype(config.KRR_COMPUTE_DTYPE)
     except TypeError as exc:

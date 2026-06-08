@@ -7,12 +7,12 @@ from ase.data import atomic_numbers
 # =========================
 # user settings
 # =========================
-DB:str = "QM9"
+DB:str = "QM7"
 
-XYZ_PATH  = Path(f"/home/dabadie/phd/molecular_learning/01_raw_data/{DB}/{DB}.xyz")
-SAVE_PATH = Path(f"/home/dabadie/phd/molecular_learning/03_descriptors/{DB}_CM_eigenval_unsorted.npy")
+XYZ_PATH  = Path(f"sample/{DB}/{DB}.xyz")
+SAVE_PATH = Path(f"sample/{DB}/{DB}_CM_ev_sorted.npy")
+COORDS_IN_BOHR = True
 
-COORDS_IN_BOHR = False
 BOHR_TO_ANG = 0.529177210903
 
 # sort eigenvalues descending

@@ -171,7 +171,7 @@ def build_distance_cache(
     ]
     n_cache_tasks = len(fold_metadata) * len(X_blocks)
     cache_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=n_cache_tasks)
-    logger.info(
+    logger.debug(
         "Estimated distance cache memory: %.2f MiB.",
         estimated_nbytes / (1024**2),
     )

@@ -7,12 +7,12 @@ from ase.data import atomic_numbers
 # =========================
 # user settings
 # =========================
-DB:str = "QM9"
-XYZ_PATH  = Path(f"/home/dabadie/phd/molecular_learning/01_raw_data/{DB}/{DB}.xyz")
-SAVE_PATH = Path(f"/home/dabadie/phd/molecular_learning/03_descriptors/{DB}_CM_upper_sorted.npy")
+DB:str = "QM7"
+XYZ_PATH  = Path(f"sample/{DB}/{DB}.xyz")
+SAVE_PATH = Path(f"sample/{DB}/{DB}_CM_upper_sorted.npy")
 
 # QM7 coordinates are often stored in Bohr. Set False if your file is already in Angstrom.
-COORDS_IN_BOHR = False
+COORDS_IN_BOHR = True
 BOHR_TO_ANG = 0.529177210903
 
 # sort the unique upper-triangular entries of each Coulomb matrix

@@ -139,7 +139,7 @@ else: # Using pre-defined splits. Separate config validation.
 
 time_end_prepare_splits:float = perf_counter()
 
-time_log.info(f"Splits prepared in {time_dif(time_start_prepare_splits, time_end_prepare_splits)}.")
+time_log.debug(f"Splits prepared in {time_dif(time_start_prepare_splits, time_end_prepare_splits)}.")
 
 # 4) Begin Training
 time_start_training:float = perf_counter()
