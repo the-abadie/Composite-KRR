@@ -1,6 +1,45 @@
 import config
 import numpy as np
 
+
+def resolve_kernel_types(n_components: int) -> list[str]:
+    kernel_types = resolve_config_sequence(
+        "KRR_KERNEL",
+        config.KRR_KERNEL,
+        n_components,
+    )
+
+    invalid_kernel_types = [
+        kernel_type
+        for kernel_type in kernel_types
+        if not isinstance(kernel_type, str)
+    ]
+    if invalid_kernel_types:
+        raise ValueError("`KRR_KERNEL` must contain only strings.")
+
+    return [kernel_type.lower() for kernel_type in kernel_types]
+
+
+def resolve_config_sequence(name: str, values, n_items: int) -> list:
+    if isinstance(values, str):
+        return [values] * n_items
+
+    try:
+        resolved_values = list(values)
+    except TypeError as exc:
+        raise ValueError(
+            f"`{name}` must be a string or a sequence with length {n_items}."
+        ) from exc
+
+    if len(resolved_values) != n_items:
+        raise ValueError(
+            f"`{name}` must be a string or have length {n_items}, "
+            f"got {len(resolved_values)}."
+        )
+
+    return resolved_values
+
+
 def validate_config() -> None:
     """
     Validates your configuration file to make sure your settings are sane before CKRR runs.
@@ -17,6 +56,8 @@ def validate_config() -> None:
     #         "`VERBOSITY` must be in {0, 1, 2} for increasing verbosity of logs "
     #         "or of type `None` for the verbosity to be set to 1."
     #     )
+
+    resolve_kernel_types(len(config.X_PATHS))
 
     if not isinstance(config.KRR_USE_DISTANCE_CACHE, bool):
         raise ValueError("`KRR_USE_DISTANCE_CACHE` must be a bool.")

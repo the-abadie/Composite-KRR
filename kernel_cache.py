@@ -843,6 +843,11 @@ def unpack_sample_matrix(X, dtype: np.dtype | type | str = np.float64) -> list[N
 
 
 def distance_spec_for_kernel(kernel_type: str) -> KernelDistanceSpec:
+    if not isinstance(kernel_type, str):
+        raise UnsupportedDistanceKernelError(
+            f"Kernel type must be a string, got {type(kernel_type).__name__}."
+        )
+
     kernel_type = kernel_type.lower()
     if kernel_type == "rbf":
         return KernelDistanceSpec(kernel_type=kernel_type, p=2, squared=True)

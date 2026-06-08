@@ -40,11 +40,11 @@ N_KFOLD = 5
 STRATIFY = True
 N_STRATA = 5
 
-KRR_KERNEL = "rbf"
-# KRR_KERNEL = [
-#     "rbf", "rbf", "rbf", "rbf", "rbf",
-#     "laplacian", "laplacian"
-# ]
+# KRR_KERNEL = "rbf"
+KRR_KERNEL = [
+    "rbf", "rbf", "rbf", "rbf", "rbf",
+    "laplacian", "laplacian"
+]
 KRR_ALPHA_BOUNDS = (1e-10, 1e2)
 KRR_GAMMA_BOUNDS = (1e-10, 1e2)
 KRR_RANDOM_SEARCH_STAGE1 = 1000

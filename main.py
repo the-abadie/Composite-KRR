@@ -18,7 +18,7 @@ from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
 from time import perf_counter, time
-from config_validation import validate_config
+from config_validation import resolve_kernel_types, validate_config
 from pathlib import Path
 
 # 0) Initialize
@@ -148,10 +148,11 @@ X_train_val = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_tra
 y_train_val = target_data[idx_train_val]
 X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
 y_test = target_data[idx_test]
+kernel_types = resolve_kernel_types(DESCRIPTOR_ORDER)
 
 base_estimator = CompositeKRREstimator(
     names=config.X_NAMES,
-    kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
+    kernel_types=kernel_types,
     normalizations=config.X_NORMS,
     normalize_kernel_weights=True,
     compute_dtype=config.KRR_COMPUTE_DTYPE,
@@ -248,7 +249,7 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
         X_train_val,
         y_train_val,
         component_names=config.X_NAMES,
-        kernel_types=[config.KRR_KERNEL] * DESCRIPTOR_ORDER,
+        kernel_types=kernel_types,
         normalizations=config.X_NORMS,
         target_normalization=config.Y_NORM,
         compute_dtype=config.KRR_COMPUTE_DTYPE,
