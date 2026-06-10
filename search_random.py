@@ -13,8 +13,9 @@ from sklearn.utils.validation import check_is_fitted
 
 from class_CompositeKRR import CompositeKRR, KernelComponent
 from cached_scoring import (
+    normalize_cached_scoring_backend,
     resolve_candidate_hyperparameter_arrays,
-    score_candidates_from_cache_numpy,
+    score_candidates_from_cache,
 )
 from kernel_cache import (
     UnsupportedDistanceKernelError,
@@ -106,6 +107,9 @@ class CachedRandomSearchCV:
         blas_threads: int | None = 1,
         refit=True,
         distance_cache,
+        cached_scoring_backend: str = "numpy",
+        pytorch_device: str | None = "auto",
+        pytorch_candidate_batch_size: int = 1,
     ):
         self.estimator = estimator
         self.param_distributions = param_distributions
@@ -117,6 +121,9 @@ class CachedRandomSearchCV:
         self.blas_threads = blas_threads
         self.refit = refit
         self.distance_cache = distance_cache
+        self.cached_scoring_backend = cached_scoring_backend
+        self.pytorch_device = pytorch_device
+        self.pytorch_candidate_batch_size = pytorch_candidate_batch_size
 
     def fit(self, X, y):
         candidates = list(
@@ -134,14 +141,18 @@ class CachedRandomSearchCV:
             candidates,
             self.distance_cache,
         )
-        split_scores = score_candidates_from_cache_numpy(
+        split_scores = score_candidates_from_cache(
             alphas=alphas,
             gammas=gammas,
             weights=weights,
             cache=self.distance_cache,
             scoring=self.scoring,
+            backend=self.cached_scoring_backend,
             n_jobs=self.n_jobs,
             blas_threads=self.blas_threads,
+            pytorch_device=self.pytorch_device,
+            pytorch_dtype=self.distance_cache.folds[0].train_distances[0].dtype,
+            pytorch_candidate_batch_size=self.pytorch_candidate_batch_size,
         )
 
         split_scores = np.asarray(split_scores, dtype=float)
@@ -186,11 +197,17 @@ class CachedRandomSearchCV:
         self.failed_candidates_ = int(np.count_nonzero(~valid_candidates))
         self.n_jobs_ = self.n_jobs
         self.blas_threads_ = self.blas_threads
+        scoring_backend = normalize_cached_scoring_backend(self.cached_scoring_backend)
+        self.cached_scoring_backend_ = scoring_backend
         self.parallel_backend_ = (
-            "serial" if self.n_jobs in (None, 1) else "threading"
+            "pytorch"
+            if scoring_backend == "pytorch"
+            else "serial" if self.n_jobs in (None, 1) else "threading"
         )
         self.parallel_granularity_ = (
-            "candidate" if self.n_jobs in (None, 1) else "candidate_fold"
+            "candidate_batch"
+            if scoring_backend == "pytorch"
+            else "candidate" if self.n_jobs in (None, 1) else "candidate_fold"
         )
         if self.failed_fold_scores_ > 0:
             logger.warning(
@@ -862,6 +879,9 @@ def staged_random_search_cv(
     stage3_weight_concentration: float = 25.0,
     bayesian_refine_decades: float = 0.3,
     bayesian_weight_logit_radius: float = 1.5,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
+    pytorch_candidate_batch_size: int = 1,
 ) -> StagedRandomSearchResult:
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
@@ -952,6 +972,9 @@ def staged_random_search_cv(
         refit=refit,
         stage_name="Stage 1",
         distance_cache=distance_cache,
+        cached_scoring_backend=cached_scoring_backend,
+        pytorch_device=pytorch_device,
+        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )
     time_stage1_end:float = perf_counter()
     time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
@@ -998,6 +1021,9 @@ def staged_random_search_cv(
         refit=refit,
         stage_name="Stage 2",
         distance_cache=distance_cache,
+        cached_scoring_backend=cached_scoring_backend,
+        pytorch_device=pytorch_device,
+        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )
     time_stage2_end:float = perf_counter()
     time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
@@ -1063,6 +1089,9 @@ def staged_random_search_cv(
             refit=refit,
             stage_name="Stage 3",
             distance_cache=distance_cache,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
+            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
         )
         time_stage3_end:float = perf_counter()
         time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
@@ -1144,6 +1173,9 @@ def staged_random_search_cv(
             distance_cache=distance_cache,
             kernel_weight_center=best_random_params["kernel_weights"],
             kernel_weight_logit_radius=bayesian_weight_logit_radius,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
+            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
         )
         time_bayes_end:float = perf_counter()
         time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
@@ -1199,6 +1231,9 @@ def _fit_search(
     refit=True,
     stage_name: str = "Random search",
     distance_cache=None,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
+    pytorch_candidate_batch_size: int = 1,
 ):
     if distance_cache is None:
         return _fit_random_search(
@@ -1229,6 +1264,9 @@ def _fit_search(
         refit=refit,
         stage_name=stage_name,
         distance_cache=distance_cache,
+        cached_scoring_backend=cached_scoring_backend,
+        pytorch_device=pytorch_device,
+        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )
 
 
@@ -1280,6 +1318,9 @@ def _fit_cached_random_search(
     refit=True,
     stage_name: str = "Random search",
     distance_cache,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
+    pytorch_candidate_batch_size: int = 1,
 ) -> CachedRandomSearchCV:
     if not param_distributions:
         raise ValueError("param_distributions must contain at least one parameter.")
@@ -1295,6 +1336,9 @@ def _fit_cached_random_search(
         blas_threads=blas_threads,
         refit=refit,
         distance_cache=distance_cache,
+        cached_scoring_backend=cached_scoring_backend,
+        pytorch_device=pytorch_device,
+        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )
     search.stage_name = stage_name
     search.fit(X, y)

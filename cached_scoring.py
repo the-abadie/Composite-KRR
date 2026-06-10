@@ -90,6 +90,68 @@ def score_estimator_params_from_cache_numpy(
     )[0]
 
 
+def score_estimator_params_from_cache_pytorch(
+    estimator,
+    params: dict,
+    cache: DistanceCache,
+    *,
+    scoring,
+    device: str | None = "auto",
+    dtype=None,
+    candidate_batch_size: int = 1,
+) -> NDArray:
+    alphas, gammas, weights = resolve_candidate_hyperparameter_arrays(
+        estimator,
+        [params],
+        cache,
+    )
+    return score_candidates_from_cache_pytorch(
+        alphas=alphas,
+        gammas=gammas,
+        weights=weights,
+        cache=cache,
+        scoring=scoring,
+        device=device,
+        dtype=dtype,
+        candidate_batch_size=candidate_batch_size,
+    )[0]
+
+
+def score_estimator_params_from_cache(
+    estimator,
+    params: dict,
+    cache: DistanceCache,
+    *,
+    scoring,
+    backend: str = "numpy",
+    n_jobs: int | None = None,
+    blas_threads: int | None = None,
+    pytorch_device: str | None = "auto",
+    pytorch_dtype=None,
+    pytorch_candidate_batch_size: int = 1,
+) -> NDArray:
+    backend = normalize_cached_scoring_backend(backend)
+    if backend == "numpy":
+        return score_estimator_params_from_cache_numpy(
+            estimator,
+            params,
+            cache,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+        )
+
+    return score_estimator_params_from_cache_pytorch(
+        estimator,
+        params,
+        cache,
+        scoring=scoring,
+        device=pytorch_device,
+        dtype=pytorch_dtype,
+        candidate_batch_size=pytorch_candidate_batch_size,
+    )
+
+
 def score_candidates_from_cache_numpy(
     *,
     alphas,
@@ -150,6 +212,81 @@ def score_candidates_from_cache_numpy(
         split_scores[candidate_index, fold_index] = score
 
     return split_scores
+
+
+def score_candidates_from_cache_pytorch(
+    *,
+    alphas,
+    gammas,
+    weights,
+    cache: DistanceCache,
+    scoring,
+    device: str | None = "auto",
+    dtype=None,
+    candidate_batch_size: int = 1,
+) -> NDArray:
+    from pytorch_backend import score_candidates_from_cache_pytorch as _impl
+
+    return _impl(
+        alphas=alphas,
+        gammas=gammas,
+        weights=weights,
+        cache=cache,
+        scoring=scoring,
+        device=device,
+        dtype=dtype,
+        candidate_batch_size=candidate_batch_size,
+    )
+
+
+def score_candidates_from_cache(
+    *,
+    alphas,
+    gammas,
+    weights,
+    cache: DistanceCache,
+    scoring,
+    backend: str = "numpy",
+    n_jobs: int | None = None,
+    blas_threads: int | None = None,
+    pytorch_device: str | None = "auto",
+    pytorch_dtype=None,
+    pytorch_candidate_batch_size: int = 1,
+) -> NDArray:
+    backend = normalize_cached_scoring_backend(backend)
+    if backend == "numpy":
+        return score_candidates_from_cache_numpy(
+            alphas=alphas,
+            gammas=gammas,
+            weights=weights,
+            cache=cache,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+        )
+
+    return score_candidates_from_cache_pytorch(
+        alphas=alphas,
+        gammas=gammas,
+        weights=weights,
+        cache=cache,
+        scoring=scoring,
+        device=pytorch_device,
+        dtype=pytorch_dtype,
+        candidate_batch_size=pytorch_candidate_batch_size,
+    )
+
+
+def normalize_cached_scoring_backend(backend: str) -> str:
+    backend = str(backend).lower()
+    if backend in {"numpy", "np", "cpu"}:
+        return "numpy"
+    if backend in {"pytorch", "torch", "gpu", "cuda", "rocm"}:
+        return "pytorch"
+    raise ValueError(
+        'cached scoring backend must be "numpy" or "pytorch", '
+        f"got {backend!r}."
+    )
 
 
 def _validate_candidate_arrays(

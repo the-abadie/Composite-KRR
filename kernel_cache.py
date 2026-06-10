@@ -661,6 +661,31 @@ def score_fold_from_distances(
     return score_predictions(fold.y_validation, y_pred, scoring)
 
 
+def score_fold_from_distances_pytorch(
+    fold: FoldDistanceCache,
+    *,
+    alpha: float,
+    gammas: list[float],
+    weights: list[float],
+    scoring,
+    kernel_types: list[str],
+    device: str | None = "auto",
+    dtype=None,
+) -> float:
+    from pytorch_backend import score_fold_from_distances_pytorch as _impl
+
+    return _impl(
+        fold,
+        alpha=alpha,
+        gammas=gammas,
+        weights=weights,
+        scoring=scoring,
+        kernel_types=kernel_types,
+        device=device,
+        dtype=dtype,
+    )
+
+
 def predict_fold_from_distances(
     fold: FoldDistanceCache,
     *,
@@ -722,6 +747,29 @@ def predict_fold_from_distances(
     return inverse_transform_target(fold.target_transformer, y_pred_transformed)
 
 
+def predict_fold_from_distances_pytorch(
+    fold: FoldDistanceCache,
+    *,
+    alpha: float,
+    gammas: list[float],
+    weights: list[float],
+    kernel_types: list[str],
+    device: str | None = "auto",
+    dtype=None,
+) -> NDArray:
+    from pytorch_backend import predict_fold_from_distances_pytorch as _impl
+
+    return _impl(
+        fold,
+        alpha=alpha,
+        gammas=gammas,
+        weights=weights,
+        kernel_types=kernel_types,
+        device=device,
+        dtype=dtype,
+    )
+
+
 def composite_kernel_from_distances(
     distances: list[NDArray],
     *,
@@ -773,6 +821,23 @@ def composite_kernel_from_distances(
             out += component
 
     return out
+
+
+def composite_kernel_from_distances_pytorch(
+    distances,
+    *,
+    gammas,
+    weights,
+    kernel_types: list[str],
+):
+    from pytorch_backend import composite_kernel_from_distances_pytorch as _impl
+
+    return _impl(
+        distances,
+        gammas=gammas,
+        weights=weights,
+        kernel_types=kernel_types,
+    )
 
 
 def thread_kernel_work_buffers() -> dict:

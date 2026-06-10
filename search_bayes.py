@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
-from cached_scoring import score_estimator_params_from_cache_numpy
+from cached_scoring import score_estimator_params_from_cache
 from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
@@ -53,6 +53,9 @@ def fit_bayesian_search(
     distance_cache=None,
     kernel_weight_center=None,
     kernel_weight_logit_radius: float = 1.5,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
+    pytorch_candidate_batch_size: int = 1,
 ) -> BayesianSearchResult:
     if optuna is None:
         raise ImportError("Optuna is required for the optional Bayesian stage.")
@@ -111,13 +114,17 @@ def fit_bayesian_search(
                 error_score="raise",
             )
         else:
-            scores = score_estimator_params_from_cache_numpy(
+            scores = score_estimator_params_from_cache(
                 estimator,
                 _prefix_params(params, prefix),
                 distance_cache,
                 scoring=scoring,
+                backend=cached_scoring_backend,
                 n_jobs=n_jobs,
                 blas_threads=blas_threads,
+                pytorch_device=pytorch_device,
+                pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
+                pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             )
             if not np.all(np.isfinite(scores)):
                 return -np.inf

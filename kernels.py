@@ -161,3 +161,45 @@ def pairwise_cross_lp_distance(
             dist[i0:i1, j0:j1] = np.sum(diff**p, axis=2) ** (1.0 / p)
 
     return dist
+
+
+def pairwise_self_lp_distance_pytorch(
+    X,
+    p: float,
+    block_size: int = 1024,
+    squared: bool = False,
+    dtype=None,
+    device: str | None = "auto",
+):
+    from pytorch_backend import pairwise_self_lp_distance_pytorch as _impl
+
+    return _impl(
+        X,
+        p=p,
+        block_size=block_size,
+        squared=squared,
+        dtype=dtype,
+        device=device,
+    )
+
+
+def pairwise_cross_lp_distance_pytorch(
+    X,
+    Y,
+    p: float,
+    block_size: int = 1024,
+    squared: bool = False,
+    dtype=None,
+    device: str | None = "auto",
+):
+    from pytorch_backend import pairwise_cross_lp_distance_pytorch as _impl
+
+    return _impl(
+        X,
+        Y,
+        p=p,
+        block_size=block_size,
+        squared=squared,
+        dtype=dtype,
+        device=device,
+    )

@@ -110,6 +110,36 @@ def validate_config() -> None:
     if not isinstance(config.KRR_USE_DISTANCE_CACHE, bool):
         raise ValueError("`KRR_USE_DISTANCE_CACHE` must be a bool.")
 
+    cached_scoring_backend = getattr(config, "KRR_CACHED_SCORING_BACKEND", "numpy")
+    if not isinstance(cached_scoring_backend, str):
+        raise ValueError("`KRR_CACHED_SCORING_BACKEND` must be a string.")
+    if cached_scoring_backend.lower() not in {
+        "numpy",
+        "np",
+        "cpu",
+        "pytorch",
+        "torch",
+        "gpu",
+        "cuda",
+        "rocm",
+    }:
+        raise ValueError('`KRR_CACHED_SCORING_BACKEND` must be "numpy" or "pytorch".')
+
+    pytorch_device = getattr(config, "KRR_PYTORCH_DEVICE", "auto")
+    if pytorch_device is not None and not isinstance(pytorch_device, str):
+        raise ValueError("`KRR_PYTORCH_DEVICE` must be `None` or a string.")
+
+    pytorch_candidate_batch_size = getattr(
+        config,
+        "KRR_PYTORCH_CANDIDATE_BATCH_SIZE",
+        1,
+    )
+    if (
+        type(pytorch_candidate_batch_size) is not int
+        or pytorch_candidate_batch_size <= 0
+    ):
+        raise ValueError("`KRR_PYTORCH_CANDIDATE_BATCH_SIZE` must be a positive int.")
+
     if (
         type(config.KRR_DISTANCE_BLOCK_SIZE) is not int
         or config.KRR_DISTANCE_BLOCK_SIZE <= 0

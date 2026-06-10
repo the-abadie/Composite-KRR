@@ -204,6 +204,9 @@ search_result = staged_random_search_cv(
     distance_dtype=config.KRR_COMPUTE_DTYPE,
     distance_cache_n_jobs=config.KRR_DISTANCE_CACHE_N_JOBS,
     distance_cache_memory_fraction=config.KRR_DISTANCE_CACHE_MEMORY_FRACTION,
+    cached_scoring_backend=config.KRR_CACHED_SCORING_BACKEND,
+    pytorch_device=config.KRR_PYTORCH_DEVICE,
+    pytorch_candidate_batch_size=config.KRR_PYTORCH_CANDIDATE_BATCH_SIZE,
     top_k_fraction=config.KRR_TOP_K_FRACTION,
     top_k_min_candidates=config.KRR_TOP_K_MIN_CANDIDATES,
 )
@@ -290,6 +293,9 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
             "distance_cache_memory_fraction": (
                 config.KRR_DISTANCE_CACHE_MEMORY_FRACTION
             ),
+            "cached_scoring_backend": config.KRR_CACHED_SCORING_BACKEND,
+            "pytorch_device": config.KRR_PYTORCH_DEVICE,
+            "pytorch_candidate_batch_size": config.KRR_PYTORCH_CANDIDATE_BATCH_SIZE,
             "top_k_fraction": config.KRR_TOP_K_FRACTION,
             "top_k_min_candidates": config.KRR_TOP_K_MIN_CANDIDATES,
         },
