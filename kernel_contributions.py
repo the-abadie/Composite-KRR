@@ -20,6 +20,8 @@ def evaluate_kernel_contributions(
     component_names: list[str],
     kernel_types: list[str],
     normalizations: list[str],
+    pca_components=None,
+    pca_whiten=False,
     target_normalization: str,
     compute_dtype,
     scoring,
@@ -31,15 +33,33 @@ def evaluate_kernel_contributions(
     component_names = list(component_names)
     kernel_types = list(kernel_types)
     normalizations = list(normalizations)
+    pca_components = _resolve_sequence(
+        "pca_components",
+        pca_components,
+        len(component_names),
+        None,
+    )
+    pca_whiten = _resolve_sequence(
+        "pca_whiten",
+        pca_whiten,
+        len(component_names),
+        False,
+    )
     n_components = len(component_names)
     timings = []
 
     if n_components == 0:
         raise ValueError("At least one kernel component is required.")
-    if not (len(kernel_types) == len(normalizations) == n_components):
+    if not (
+        len(kernel_types)
+        == len(normalizations)
+        == len(pca_components)
+        == len(pca_whiten)
+        == n_components
+    ):
         raise ValueError(
-            "component_names, kernel_types, and normalizations must have "
-            "matching lengths."
+            "component_names, kernel_types, normalizations, pca_components, "
+            "and pca_whiten must have matching lengths."
         )
 
     X = np.asarray(X, dtype=object)
@@ -72,6 +92,8 @@ def evaluate_kernel_contributions(
             component_names=component_names,
             kernel_types=kernel_types,
             normalizations=normalizations,
+            pca_components=pca_components,
+            pca_whiten=pca_whiten,
             target_normalization=target_normalization,
             compute_dtype=compute_dtype,
             scoring=scoring,
@@ -102,6 +124,8 @@ def evaluate_kernel_contributions(
             component_names=component_names,
             kernel_types=kernel_types,
             normalizations=normalizations,
+            pca_components=pca_components,
+            pca_whiten=pca_whiten,
             target_normalization=target_normalization,
             compute_dtype=compute_dtype,
             scoring=scoring,
@@ -137,6 +161,8 @@ def _fit_component_subset(
     component_names: list[str],
     kernel_types: list[str],
     normalizations: list[str],
+    pca_components: list,
+    pca_whiten: list[bool],
     target_normalization: str,
     compute_dtype,
     scoring,
@@ -150,11 +176,15 @@ def _fit_component_subset(
     subset_names = [component_names[index] for index in component_indices]
     subset_kernel_types = [kernel_types[index] for index in component_indices]
     subset_norms = [normalizations[index] for index in component_indices]
+    subset_pca_components = [pca_components[index] for index in component_indices]
+    subset_pca_whiten = [pca_whiten[index] for index in component_indices]
     subset_estimator = TransformedTargetRegressor(
         regressor=CompositeKRREstimator(
             names=subset_names,
             kernel_types=subset_kernel_types,
             normalizations=subset_norms,
+            pca_components=subset_pca_components,
+            pca_whiten=subset_pca_whiten,
             normalize_kernel_weights=True,
             compute_dtype=compute_dtype,
         ),
@@ -174,3 +204,18 @@ def _fit_component_subset(
         cv=cv,
         **dict(search_kwargs),
     )
+
+
+def _resolve_sequence(name: str, values, n_items: int, default):
+    if values is None:
+        return [default] * n_items
+    if isinstance(values, str) or np.isscalar(values):
+        return [values] * n_items
+
+    values = list(values)
+    if len(values) != n_items:
+        raise ValueError(
+            f"{name} must have length {n_items}, got {len(values)}."
+        )
+
+    return values

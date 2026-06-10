@@ -20,6 +20,24 @@ def resolve_kernel_types(n_components: int) -> list[str]:
     return [kernel_type.lower() for kernel_type in kernel_types]
 
 
+def resolve_pca_components(n_components: int) -> list:
+    return resolve_optional_config_sequence(
+        "X_PCA_COMPONENTS",
+        getattr(config, "X_PCA_COMPONENTS", None),
+        n_components,
+        None,
+    )
+
+
+def resolve_pca_whiten(n_components: int) -> list[bool]:
+    return resolve_optional_config_sequence(
+        "X_PCA_WHITEN",
+        getattr(config, "X_PCA_WHITEN", False),
+        n_components,
+        False,
+    )
+
+
 def resolve_config_sequence(name: str, values, n_items: int) -> list:
     if isinstance(values, str):
         return [values] * n_items
@@ -34,6 +52,28 @@ def resolve_config_sequence(name: str, values, n_items: int) -> list:
     if len(resolved_values) != n_items:
         raise ValueError(
             f"`{name}` must be a string or have length {n_items}, "
+            f"got {len(resolved_values)}."
+        )
+
+    return resolved_values
+
+
+def resolve_optional_config_sequence(name: str, values, n_items: int, default) -> list:
+    if values is None:
+        return [default] * n_items
+    if isinstance(values, str) or np.isscalar(values):
+        return [values] * n_items
+
+    try:
+        resolved_values = list(values)
+    except TypeError as exc:
+        raise ValueError(
+            f"`{name}` must be a scalar or a sequence with length {n_items}."
+        ) from exc
+
+    if len(resolved_values) != n_items:
+        raise ValueError(
+            f"`{name}` must be a scalar or have length {n_items}, "
             f"got {len(resolved_values)}."
         )
 
@@ -57,7 +97,15 @@ def validate_config() -> None:
     #         "or of type `None` for the verbosity to be set to 1."
     #     )
 
-    resolve_kernel_types(len(config.X_PATHS))
+    n_descriptors = len(config.X_PATHS)
+    resolve_kernel_types(n_descriptors)
+
+    for component in resolve_pca_components(n_descriptors):
+        _validate_pca_components(component)
+
+    for whiten in resolve_pca_whiten(n_descriptors):
+        if type(whiten) is not bool:
+            raise ValueError("`X_PCA_WHITEN` values must be bools.")
 
     if not isinstance(config.KRR_USE_DISTANCE_CACHE, bool):
         raise ValueError("`KRR_USE_DISTANCE_CACHE` must be a bool.")
@@ -143,3 +191,36 @@ def validate_config() -> None:
             "`KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS` must be "
             "`None` or a non-negative int."
         )
+
+
+def _validate_pca_components(value) -> None:
+    if value is None:
+        return
+
+    if isinstance(value, np.integer):
+        value = int(value)
+
+    if isinstance(value, np.floating):
+        value = float(value)
+
+    if type(value) is int:
+        if value <= 0:
+            raise ValueError("Integer `X_PCA_COMPONENTS` values must be positive.")
+        return
+
+    if type(value) is float:
+        if not 0.0 < value < 1.0:
+            raise ValueError(
+                "Float `X_PCA_COMPONENTS` values must be in the open interval (0, 1)."
+            )
+        return
+
+    if isinstance(value, str):
+        if value != "mle":
+            raise ValueError('String `X_PCA_COMPONENTS` values must be "mle".')
+        return
+
+    raise ValueError(
+        "`X_PCA_COMPONENTS` values must be None, a positive int, "
+        'a float in (0, 1), or "mle".'
+    )

@@ -18,7 +18,12 @@ from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
 from time import perf_counter, time
-from config_validation import resolve_kernel_types, validate_config
+from config_validation import (
+    resolve_kernel_types,
+    resolve_pca_components,
+    resolve_pca_whiten,
+    validate_config,
+)
 from pathlib import Path
 
 # 0) Initialize
@@ -26,9 +31,20 @@ time_0:float = perf_counter()
 TIMESTAMP:int = int(time())
 validate_config()
 
-configure_logging(config.VERBOSITY)
+if config.OUTPUT_DIR is None:
+    print(f"[init] `OUTPUT_DIR` is `None`. Setting output directory to `output/{TIMESTAMP}`")
+    config.OUTPUT_DIR = Path("output") / str(TIMESTAMP)
+
+if config.OVERWRITE_OK or config.OVERWRITE_OK is not None:
+    makedirs(config.OUTPUT_DIR, exist_ok=True)
+else:
+    makedirs(config.OUTPUT_DIR, exist_ok=False)
+print(f"[init] Output will be written to {config.OUTPUT_DIR}")
+
+configure_logging(config.VERBOSITY, log_path=Path(config.OUTPUT_DIR) / "run.log")
 logger = logging.getLogger("CKRR")
 time_log = logging.getLogger("timing")
+logger.warning(f"Logger initialized. Log will be written to {config.OUTPUT_DIR}/run.log")
 
 if config.SEED is None:
     from time import time
@@ -39,13 +55,6 @@ random.seed(config.SEED)
 np.random.seed(config.SEED)
 rng = np.random.default_rng(config.SEED)
 
-if config.OUTPUT_DIR is None:
-    logger.warning(f"`OUTPUT_DIR` is `None`. Setting output directory to `output/{TIMESTAMP}`")
-if config.OVERWRITE_OK or config.OVERWRITE_OK is not None:
-    makedirs(config.OUTPUT_DIR, exist_ok=True)
-else:
-    makedirs(config.OUTPUT_DIR, exist_ok=False)
-logger.warning(f"Output will be written to {config.OUTPUT_DIR}")
 
 
 time_end_initialization:float = perf_counter()
@@ -149,11 +158,15 @@ y_train_val = target_data[idx_train_val]
 X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
 y_test = target_data[idx_test]
 kernel_types = resolve_kernel_types(DESCRIPTOR_ORDER)
+pca_components = resolve_pca_components(DESCRIPTOR_ORDER)
+pca_whiten = resolve_pca_whiten(DESCRIPTOR_ORDER)
 
 base_estimator = CompositeKRREstimator(
     names=config.X_NAMES,
     kernel_types=kernel_types,
     normalizations=config.X_NORMS,
+    pca_components=pca_components,
+    pca_whiten=pca_whiten,
     normalize_kernel_weights=True,
     compute_dtype=config.KRR_COMPUTE_DTYPE,
 )
@@ -228,7 +241,7 @@ if len(idx_test) > 0:
     logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
 
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
-    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=50, OUTPUT_DIR=config.OUTPUT_DIR)
+    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=100, OUTPUT_DIR=config.OUTPUT_DIR)
 
 postprocess.plot_random_search_validation_error(
     search_result,
@@ -251,6 +264,8 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
         component_names=config.X_NAMES,
         kernel_types=kernel_types,
         normalizations=config.X_NORMS,
+        pca_components=pca_components,
+        pca_whiten=pca_whiten,
         target_normalization=config.Y_NORM,
         compute_dtype=config.KRR_COMPUTE_DTYPE,
         scoring=scoring,

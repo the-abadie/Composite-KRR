@@ -9,23 +9,21 @@ from scipy import interpolate
 # endregion
 
 BOHR_TO_ANGSTROM = 0.529177210903
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 # region User Parameters
 DB:str = "QM7"
 DISTRIBUTION_PATH = "RCD_3.0_300.npy"
 MOL_PATH = f"{DB}.xyz"
 
-OUTPUT_FILE = f"{DB}_overlap_N.npy"
+OUTPUT_FILE = f"{DB}_overlap.npy"
 
-N_CORES = 8
+N_CORES = 16
 RESOLUTION = 0
 VERBOSE = 1
 XYZ_UNITS = "bohr"
 
 DERIVATIVES = False
-NORMALIZE_PER_ATOM = True
+NORMALIZE_PER_ATOM = False
 
 CUTOFF = 3.0
 DR = 3.0 / 300
@@ -94,10 +92,6 @@ def getZ(symbol:str) -> int:
 
 def getDensity(Z: int, data: np.ndarray) -> np.ndarray:
     return data[Z - 1]
-
-
-def resolve_sample_path(path: str) -> str:
-    return path if os.path.isabs(path) else os.path.join(SCRIPT_DIR, path)
 
 
 def get_descriptor_block_infos(derivatives: bool) -> tuple[DescriptorBlock, ...]:
@@ -381,25 +375,21 @@ def collect_descriptors_with_progress(
 
 def main() -> None:
     # region Validation
-    distribution_path = resolve_sample_path(DISTRIBUTION_PATH)
-    mol_path = resolve_sample_path(MOL_PATH)
-    output_file = resolve_sample_path(OUTPUT_FILE)
-
     if N_CORES <= 0:
         raise ValueError(f"`N_CORES` must be positive, got {N_CORES}.")
     if RESOLUTION < 0:
         raise ValueError(f"`RESOLUTION` must be >= 0, got {RESOLUTION}.")
     if XYZ_UNITS not in {"angstrom", "bohr"}:
         raise ValueError(f"`XYZ_UNITS` must be either 'angstrom' or 'bohr', got {XYZ_UNITS!r}.")
-    if not os.path.exists(distribution_path):
-        raise FileNotFoundError(f"Density file not found: {distribution_path}")
-    if not os.path.exists(mol_path):
-        raise FileNotFoundError(f"XYZ file not found: {mol_path}")
+    if not os.path.exists(DISTRIBUTION_PATH):
+        raise FileNotFoundError(f"Density file not found: {DISTRIBUTION_PATH}")
+    if not os.path.exists(MOL_PATH):
+        raise FileNotFoundError(f"XYZ file not found: {MOL_PATH}")
     # endregion
 
     # region Pre-Processing
-    rhos = np.load(distribution_path)
-    mols = getMols(mol_path, xyz_units=XYZ_UNITS)
+    rhos = np.load(DISTRIBUTION_PATH)
+    mols = getMols(MOL_PATH, xyz_units=XYZ_UNITS)
 
     distribution_length = rhos.shape[1]
     print(f"Cutoff: {CUTOFF} A")
@@ -432,10 +422,10 @@ def main() -> None:
     # endregion
 
     # region Save Data
-    np.save(file=output_file, arr=descriptors)
+    np.save(file=OUTPUT_FILE, arr=descriptors)
     save_region_slices(
         descriptors=descriptors,
-        base_output_path=output_file,
+        base_output_path=OUTPUT_FILE,
         channel_length=channel_length,
         derivatives=DERIVATIVES,
         verbose=VERBOSE,
@@ -447,7 +437,7 @@ def main() -> None:
             "RCD DESCRIPTORS COMPLETE\n",
             f"XYZ INPUT UNITS: {XYZ_UNITS} ({'converted to angstrom' if XYZ_UNITS == 'bohr' else 'no conversion'})\n",
             f"DESCRIPTOR ARRAY SHAPE: {descriptors.shape}\n",
-            f"DESCRIPTORS WRITTEN TO {output_file}\n",
+            f"DESCRIPTORS WRITTEN TO {OUTPUT_FILE}\n",
             f"{len(mols)} DESCRIPTORS COMPUTED IN {round(duration, 2)} SECONDS ({round(duration / 60., 2)} MINUTES).\n",
             f"{round(len(mols) / duration, 2)} DESCRIPTORS/SECOND ({round(3600 * len(mols) / duration, 2)} DESCRIPTORS/HOUR)\n",
             f"{round(len(mols) / duration / N_CORES, 2)} DESCRIPTORS/SECOND/CORE ({round(3600 * len(mols) / duration / N_CORES, 2)} DESCRIPTORS/HOUR/CORE)\n",

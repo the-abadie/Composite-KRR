@@ -2,6 +2,7 @@ from class_CompositeDescriptor import CompositeDescriptor
 import logging
 
 import numpy as np
+from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
@@ -60,24 +61,49 @@ def make_target_preprocessor(transform: str):
     raise ValueError(f'Unknown target transform "{transform}"')
 
 
-def make_data_preprocessor(transform: str):
+def make_data_preprocessor(
+    transform: str,
+    pca_components=None,
+    *,
+    pca_whiten: bool = False,
+):
+    steps = []
+
     if transform == "none" or transform == "passthrough":
         # logger.debug("Data Preprocesor: none")
-        return FunctionTransformer(
-            func=_identity, inverse_func=_identity, validate=False
-        )
-    if transform == "standard":
+        pass
+    elif transform == "standard":
         # logger.debug("Data Preprocesor: StandardScaler")
-        return StandardScaler()
-    if transform == "log_standard":
+        steps.append(("scaler", StandardScaler()))
+    elif transform == "log_standard":
         # logger.debug("Data Preprocesor: logStandardScaler")
         log1p = FunctionTransformer(
             np.log1p,
             feature_names_out="one-to-one",
             validate=False,
         )
-        return Pipeline([("log1p", log1p), ("scaler", StandardScaler())])
-    raise ValueError(f'Unknown data transform: "{transform}"')
+        steps.extend([("log1p", log1p), ("scaler", StandardScaler())])
+    else:
+        raise ValueError(f'Unknown data transform: "{transform}"')
+
+    if pca_components is not None:
+        steps.append(
+            (
+                "pca",
+                PCA(
+                    n_components=pca_components,
+                    whiten=pca_whiten,
+                    svd_solver="auto",
+                ),
+            )
+        )
+
+    if not steps:
+        return FunctionTransformer(
+            func=_identity, inverse_func=_identity, validate=False
+        )
+
+    return Pipeline(steps)
 
 
 def transform_descriptors_for_split(descriptors:CompositeDescriptor, train_idx, eval_idx):

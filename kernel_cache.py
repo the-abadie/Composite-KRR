@@ -68,6 +68,8 @@ class DistanceCache:
     names: list[str]
     kernel_types: list[str]
     normalizations: list[str]
+    pca_components: list
+    pca_whiten: list[bool]
     estimated_nbytes: int
     available_memory_nbytes: int | None
     memory_budget_nbytes: int | None
@@ -108,6 +110,8 @@ def build_distance_cache(
     names: list[str],
     kernel_types: list[str],
     normalizations: list[str],
+    pca_components=None,
+    pca_whiten=False,
     target_transformer=None,
     block_size: int = 1024,
     dtype: np.dtype | type = np.float64,
@@ -129,8 +133,24 @@ def build_distance_cache(
         )
     if y.shape[0] != X_blocks[0].shape[0]:
         raise ValueError(f"X has {X_blocks[0].shape[0]} samples, but y has {y.shape[0]}.")
-    if len(names) != len(kernel_types) or len(names) != len(normalizations):
-        raise ValueError("names, kernel_types, and normalizations must have the same length.")
+    pca_components = resolve_sequence(
+        "pca_components",
+        pca_components,
+        len(names),
+        None,
+    )
+    pca_whiten = resolve_sequence("pca_whiten", pca_whiten, len(names), False)
+    if not (
+        len(names)
+        == len(kernel_types)
+        == len(normalizations)
+        == len(pca_components)
+        == len(pca_whiten)
+    ):
+        raise ValueError(
+            "names, kernel_types, normalizations, pca_components, and "
+            "pca_whiten must have the same length."
+        )
 
     specs = [distance_spec_for_kernel(kernel_type) for kernel_type in kernel_types]
     fold_indices = [
@@ -199,14 +219,22 @@ def build_distance_cache(
                 validation_idx=metadata.validation_indices,
                 X_block=X_block,
                 normalization=normalization,
+                pca_components=pca_component,
+                pca_whiten=pca_whiten_block,
                 spec=spec,
                 block_size=block_size,
                 dtype=dtype,
                 use_scipy_for_p1_p2=use_scipy_for_p1_p2,
             )
             for fold_index, metadata in enumerate(fold_metadata)
-            for component_index, (X_block, normalization, spec) in enumerate(
-                zip(X_blocks, normalizations, specs)
+            for component_index, (
+                X_block,
+                normalization,
+                pca_component,
+                pca_whiten_block,
+                spec,
+            ) in enumerate(
+                zip(X_blocks, normalizations, pca_components, pca_whiten, specs)
             )
         ]
     else:
@@ -219,14 +247,22 @@ def build_distance_cache(
                     validation_idx=metadata.validation_indices,
                     X_block=X_block,
                     normalization=normalization,
+                    pca_components=pca_component,
+                    pca_whiten=pca_whiten_block,
                     spec=spec,
                     block_size=block_size,
                     dtype=dtype,
                     use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                 )
                 for fold_index, metadata in enumerate(fold_metadata)
-                for component_index, (X_block, normalization, spec) in enumerate(
-                    zip(X_blocks, normalizations, specs)
+                for component_index, (
+                    X_block,
+                    normalization,
+                    pca_component,
+                    pca_whiten_block,
+                    spec,
+                ) in enumerate(
+                    zip(X_blocks, normalizations, pca_components, pca_whiten, specs)
                 )
             )
 
@@ -241,6 +277,8 @@ def build_distance_cache(
         names=list(names),
         kernel_types=list(kernel_types),
         normalizations=list(normalizations),
+        pca_components=list(pca_components),
+        pca_whiten=list(pca_whiten),
         estimated_nbytes=estimated_nbytes,
         available_memory_nbytes=available_memory_nbytes,
         memory_budget_nbytes=memory_budget_nbytes,
@@ -286,12 +324,18 @@ def build_component_fold_distance_cache(
     validation_idx: NDArray,
     X_block: NDArray,
     normalization: str,
+    pca_components,
+    pca_whiten: bool,
     spec: KernelDistanceSpec,
     block_size: int,
     dtype: np.dtype,
     use_scipy_for_p1_p2: bool,
 ) -> _ComponentFoldDistanceCache:
-    preprocessor = make_data_preprocessor(normalization)
+    preprocessor = make_data_preprocessor(
+        normalization,
+        pca_components=pca_components,
+        pca_whiten=pca_whiten,
+    )
     X_train = preprocessor.fit_transform(X_block[train_idx])
     X_validation = preprocessor.transform(X_block[validation_idx])
 
@@ -370,11 +414,21 @@ def build_fold_distance_cache(
     y: NDArray,
     specs: list[KernelDistanceSpec],
     normalizations: list[str],
-    target_transformer,
+    pca_components=None,
+    pca_whiten=False,
+    target_transformer=None,
     block_size: int,
     dtype: np.dtype,
     use_scipy_for_p1_p2: bool,
 ) -> FoldDistanceCache:
+    pca_components = resolve_sequence(
+        "pca_components",
+        pca_components,
+        len(X_blocks),
+        None,
+    )
+    pca_whiten = resolve_sequence("pca_whiten", pca_whiten, len(X_blocks), False)
+
     metadata = build_fold_distance_metadata(
         fold_id=fold_id,
         train_idx=train_idx,
@@ -392,13 +446,21 @@ def build_fold_distance_cache(
             validation_idx=validation_idx,
             X_block=X_block,
             normalization=normalization,
+            pca_components=pca_component,
+            pca_whiten=pca_whiten_block,
             spec=spec,
             block_size=block_size,
             dtype=dtype,
             use_scipy_for_p1_p2=use_scipy_for_p1_p2,
         )
-        for component_index, (X_block, normalization, spec) in enumerate(
-            zip(X_blocks, normalizations, specs)
+        for component_index, (
+            X_block,
+            normalization,
+            pca_component,
+            pca_whiten_block,
+            spec,
+        ) in enumerate(
+            zip(X_blocks, normalizations, pca_components, pca_whiten, specs)
         )
     ]
 

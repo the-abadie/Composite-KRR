@@ -402,6 +402,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         names=None,
         kernel_types=None,
         normalizations=None,
+        pca_components=None,
+        pca_whiten=False,
         normalize_kernel_weights=False,
         compute_dtype,
     ):
@@ -411,6 +413,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.names = names
         self.kernel_types = kernel_types
         self.normalizations = normalizations
+        self.pca_components = pca_components
+        self.pca_whiten = pca_whiten
         self.normalize_kernel_weights = normalize_kernel_weights
         self.compute_dtype = compute_dtype
 
@@ -432,6 +436,12 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         normalizations = self._resolve_sequence(
             "normalizations", self.normalizations, n_blocks, "none"
         )
+        pca_components = self._resolve_sequence(
+            "pca_components", self.pca_components, n_blocks, None
+        )
+        pca_whiten = self._resolve_sequence(
+            "pca_whiten", self.pca_whiten, n_blocks, False
+        )
         gammas = self._resolve_sequence("gammas", self.gammas, n_blocks, 1.0)
         weights = self._resolve_sequence(
             "kernel_weights", self.kernel_weights, n_blocks, 1.0
@@ -448,8 +458,17 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.X_preprocessors_ = []
         X_blocks_t = []
 
-        for X_block, normalization in zip(X_blocks, normalizations):
-            preprocessor = make_data_preprocessor(normalization)
+        for X_block, normalization, pca_component, pca_whiten_block in zip(
+            X_blocks,
+            normalizations,
+            pca_components,
+            pca_whiten,
+        ):
+            preprocessor = make_data_preprocessor(
+                normalization,
+                pca_components=pca_component,
+                pca_whiten=pca_whiten_block,
+            )
             X_block_t = np.asarray(
                 preprocessor.fit_transform(X_block),
                 dtype=compute_dtype,
@@ -480,6 +499,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.names_ = names
         self.kernel_types_ = kernel_types
         self.normalizations_ = normalizations
+        self.pca_components_ = pca_components
+        self.pca_whiten_ = pca_whiten
         self.gammas_ = list(np.asarray(gammas, dtype=float))
         self.kernel_weights_ = list(weights)
         self.compute_dtype_ = compute_dtype
@@ -668,17 +689,42 @@ def _gamma_centers_from_full_data(
         n_components,
         "none",
     )
+    pca_components = resolve_sequence(
+        "pca_components",
+        getattr(regressor, "pca_components", None),
+        n_components,
+        None,
+    )
+    pca_whiten = resolve_sequence(
+        "pca_whiten",
+        getattr(regressor, "pca_whiten", False),
+        n_components,
+        False,
+    )
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
     centers = []
 
-    for X_block, normalization, kernel_type, legal_bounds in zip(
+    for (
+        X_block,
+        normalization,
+        pca_component,
+        pca_whiten_block,
+        kernel_type,
+        legal_bounds,
+    ) in zip(
         X_blocks,
         normalizations,
+        pca_components,
+        pca_whiten,
         kernel_types,
         legal_gamma_bounds,
     ):
         spec = distance_spec_for_kernel(kernel_type)
-        preprocessor = make_data_preprocessor(normalization)
+        preprocessor = make_data_preprocessor(
+            normalization,
+            pca_components=pca_component,
+            pca_whiten=pca_whiten_block,
+        )
         X_block_t = preprocessor.fit_transform(X_block)
         distances = pairwise_self_lp_distance(
             X_block_t,
@@ -1388,6 +1434,18 @@ def _maybe_build_distance_cache(
     normalizations = resolve_sequence(
         "normalizations", regressor.normalizations, n_components, "none"
     )
+    pca_components = resolve_sequence(
+        "pca_components",
+        getattr(regressor, "pca_components", None),
+        n_components,
+        None,
+    )
+    pca_whiten = resolve_sequence(
+        "pca_whiten",
+        getattr(regressor, "pca_whiten", False),
+        n_components,
+        False,
+    )
     target_transformer = extract_target_transformer(estimator)
 
     try:
@@ -1398,6 +1456,8 @@ def _maybe_build_distance_cache(
             names=names,
             kernel_types=kernel_types,
             normalizations=normalizations,
+            pca_components=pca_components,
+            pca_whiten=pca_whiten,
             target_transformer=target_transformer,
             block_size=block_size,
             dtype=np.dtype(dtype),
