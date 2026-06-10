@@ -4,3 +4,4 @@ __pycache__
 depr
 plot-*
 sample/QM7/*.npy
+sample/output/*
