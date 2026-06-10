@@ -1,7 +1,7 @@
 SEED = 1
 VERBOSITY = 2
 
-RUN_NAME = "test"
+RUN_NAME = "QM7_OVERLAP_SEP"
 
 # X_PATHS = [
 #     "sample/QM7/QM7_overlap_N_0_nosym.npy",
@@ -24,10 +24,10 @@ RUN_NAME = "test"
 
 X_MAX = 4
 X_PATHS = [f"sample/QM7/QM7_overlap_{i}.npy" for i in range(0,  X_MAX+1)]
-X_NAMES = [f"overlap_PCA_0.99_{i:02}" for i in range(0,  X_MAX+1)]
+X_NAMES = [f"overlap_mk_i_{i:02}" for i in range(0,  X_MAX+1)]
 X_NORMS = ["standard" for _ in X_PATHS]
-X_PCA_COMPONENTS = [0.99 for _ in X_PATHS]
-X_PCA_WHITEN = [False for _ in X_PATHS]
+# X_PCA_COMPONENTS = [0.99 for _ in X_PATHS]
+# X_PCA_WHITEN = [False for _ in X_PATHS]
 
 
 Y_PATH = "sample/QM7/atomization_energy.npy"
@@ -51,10 +51,10 @@ KRR_ALPHA_BOUNDS = (1e-9, 1e2)
 KRR_GAMMA_BOUNDS = (1e-9, 1e2)
 KRR_RANDOM_SEARCH_STAGE1 = 5000
 KRR_RANDOM_SEARCH_STAGE2 = 5000
-KRR_RANDOM_SEARCH_STAGE3 = 2500
+KRR_RANDOM_SEARCH_STAGE3 = 0
 KRR_TOP_K_FRACTION = 0.25
 KRR_TOP_K_MIN_CANDIDATES = 5
-KRR_BAYESIAN_SEARCH_TRIALS = 2500
+KRR_BAYESIAN_SEARCH_TRIALS = 2000
 KRR_BAYESIAN_SEARCH_TIMEOUT = None
 KRR_BAYESIAN_SEARCH_PATIENCE = 1000
 

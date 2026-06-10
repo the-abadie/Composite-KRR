@@ -2,10 +2,9 @@ from dataclasses import dataclass
 
 import logging
 import numpy as np
-from numpy.linalg import LinAlgError
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
-from kernel_cache import cached_cross_val_scores
+from cached_scoring import score_estimator_params_from_cache_numpy
 from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
@@ -112,17 +111,14 @@ def fit_bayesian_search(
                 error_score="raise",
             )
         else:
-            try:
-                scores = cached_cross_val_scores(
-                    estimator,
-                    _prefix_params(params, prefix),
-                    distance_cache,
-                    scoring=scoring,
-                    n_jobs=n_jobs,
-                    blas_threads=blas_threads,
-                )
-            except LinAlgError:
-                return -np.inf
+            scores = score_estimator_params_from_cache_numpy(
+                estimator,
+                _prefix_params(params, prefix),
+                distance_cache,
+                scoring=scoring,
+                n_jobs=n_jobs,
+                blas_threads=blas_threads,
+            )
             if not np.all(np.isfinite(scores)):
                 return -np.inf
 

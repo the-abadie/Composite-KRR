@@ -1,12 +1,8 @@
 from dataclasses import dataclass
-from contextlib import nullcontext
 from time import perf_counter
 
 import numpy as np
 import logging
-from joblib import Parallel, delayed
-from numpy.linalg import LinAlgError
-from threadpoolctl import threadpool_limits
 from utilities import configure_logging, time_dif
 from config import VERBOSITY
 from scipy.stats import loguniform
@@ -16,6 +12,10 @@ from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_is_fitted
 
 from class_CompositeKRR import CompositeKRR, KernelComponent
+from cached_scoring import (
+    resolve_candidate_hyperparameter_arrays,
+    score_candidates_from_cache_numpy,
+)
 from kernel_cache import (
     UnsupportedDistanceKernelError,
     build_distance_cache,
@@ -24,7 +24,6 @@ from kernel_cache import (
     extract_target_transformer,
     resolve_kernel_hyperparameters,
     resolve_sequence,
-    score_fold_from_distances,
     unpack_sample_matrix,
 )
 from kernels import pairwise_self_lp_distance
@@ -130,48 +129,20 @@ class CachedRandomSearchCV:
         if not candidates:
             raise ValueError("ParameterSampler produced no candidates.")
 
-        if self.n_jobs in (None, 1):
-            split_scores = [
-                _score_cached_candidate(
-                    self.estimator,
-                    params,
-                    self.distance_cache,
-                    self.scoring,
-                )
-                for params in candidates
-            ]
-        else:
-            candidate_hyperparameters = [
-                _resolve_cached_candidate_hyperparameters(
-                    self.estimator,
-                    params,
-                    self.distance_cache,
-                )
-                for params in candidates
-            ]
-            with _threadpool_limits_for_blas(self.blas_threads):
-                scored_folds = Parallel(n_jobs=self.n_jobs, prefer="threads")(
-                    delayed(_score_cached_candidate_fold)(
-                        candidate_index,
-                        fold_index,
-                        fold,
-                        alpha,
-                        gammas,
-                        weights,
-                        self.distance_cache.kernel_types,
-                        self.scoring,
-                    )
-                    for candidate_index, (alpha, gammas, weights) in enumerate(
-                        candidate_hyperparameters
-                    )
-                    for fold_index, fold in enumerate(self.distance_cache.folds)
-                )
-            split_scores = np.empty(
-                (len(candidates), len(self.distance_cache.folds)),
-                dtype=float,
-            )
-            for candidate_index, fold_index, score in scored_folds:
-                split_scores[candidate_index, fold_index] = score
+        alphas, gammas, weights = resolve_candidate_hyperparameter_arrays(
+            self.estimator,
+            candidates,
+            self.distance_cache,
+        )
+        split_scores = score_candidates_from_cache_numpy(
+            alphas=alphas,
+            gammas=gammas,
+            weights=weights,
+            cache=self.distance_cache,
+            scoring=self.scoring,
+            n_jobs=self.n_jobs,
+            blas_threads=self.blas_threads,
+        )
 
         split_scores = np.asarray(split_scores, dtype=float)
         failed_fold_mask = ~np.isfinite(split_scores)
@@ -235,88 +206,6 @@ class CachedRandomSearchCV:
             self.best_estimator_.fit(X, y)
 
         return self
-
-
-def _score_cached_candidate(estimator, params, distance_cache, scoring):
-    alpha, gammas, weights = _resolve_cached_candidate_hyperparameters(
-        estimator,
-        params,
-        distance_cache,
-    )
-    scores = [
-        _safe_score_cached_fold(
-            fold,
-            alpha=alpha,
-            gammas=gammas,
-            weights=weights,
-            kernel_types=distance_cache.kernel_types,
-            scoring=scoring,
-        )
-        for fold in distance_cache.folds
-    ]
-    return np.asarray(scores, dtype=float)
-
-
-def _resolve_cached_candidate_hyperparameters(estimator, params, distance_cache):
-    candidate = clone(estimator)
-    if params:
-        candidate.set_params(**params)
-
-    regressor = extract_regressor(candidate)
-    return resolve_kernel_hyperparameters(
-        regressor,
-        n_components=distance_cache.n_components,
-    )
-
-
-def _score_cached_candidate_fold(
-    candidate_index,
-    fold_index,
-    fold,
-    alpha,
-    gammas,
-    weights,
-    kernel_types,
-    scoring,
-):
-    score = _safe_score_cached_fold(
-        fold,
-        alpha=alpha,
-        gammas=gammas,
-        weights=weights,
-        kernel_types=kernel_types,
-        scoring=scoring,
-    )
-    return candidate_index, fold_index, score
-
-
-def _safe_score_cached_fold(
-    fold,
-    *,
-    alpha,
-    gammas,
-    weights,
-    kernel_types,
-    scoring,
-):
-    try:
-        return score_fold_from_distances(
-            fold,
-            alpha=alpha,
-            gammas=gammas,
-            weights=weights,
-            kernel_types=kernel_types,
-            scoring=scoring,
-        )
-    except LinAlgError:
-        return np.nan
-
-
-def _threadpool_limits_for_blas(blas_threads: int | None):
-    if blas_threads is None:
-        return nullcontext()
-
-    return threadpool_limits(limits=blas_threads)
 
 
 @dataclass(frozen=True)

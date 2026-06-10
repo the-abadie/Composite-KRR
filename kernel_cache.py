@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from contextlib import nullcontext
 import logging
 import os
 import platform
@@ -641,60 +640,6 @@ def format_nbytes(nbytes: int) -> str:
                 return f"{int(value)} {unit}"
             return f"{value:.2f} {unit}"
         value /= 1024
-
-
-def cached_cross_val_scores(
-    estimator,
-    params: dict,
-    cache: DistanceCache,
-    *,
-    scoring,
-    n_jobs: int | None = None,
-    blas_threads: int | None = None,
-) -> NDArray:
-    candidate = clone(estimator)
-    if params:
-        candidate.set_params(**params)
-
-    regressor = extract_regressor(candidate)
-    alpha, gammas, weights = resolve_kernel_hyperparameters(
-        regressor,
-        n_components=cache.n_components,
-    )
-
-    if n_jobs in (None, 1) or len(cache.folds) == 1:
-        scores = [
-            score_fold_from_distances(
-                fold,
-                alpha=alpha,
-                gammas=gammas,
-                weights=weights,
-                scoring=scoring,
-                kernel_types=cache.kernel_types,
-            )
-            for fold in cache.folds
-        ]
-        return np.asarray(scores, dtype=float)
-
-    score_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=len(cache.folds))
-    threadpool_context = (
-        nullcontext()
-        if blas_threads is None
-        else threadpool_limits(limits=blas_threads)
-    )
-    with threadpool_context:
-        scores = Parallel(n_jobs=score_n_jobs, prefer="threads")(
-            delayed(score_fold_from_distances)(
-                fold,
-                alpha=alpha,
-                gammas=gammas,
-                weights=weights,
-                scoring=scoring,
-                kernel_types=cache.kernel_types,
-            )
-            for fold in cache.folds
-        )
-    return np.asarray(scores, dtype=float)
 
 
 def score_fold_from_distances(
