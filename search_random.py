@@ -903,6 +903,7 @@ def staged_random_search_cv(
         )
 
     distance_cache = None
+    scoring_distance_cache = None
     if use_distance_cache:
         time_cache_start: float = perf_counter()
         distance_cache = _maybe_build_distance_cache(
@@ -915,6 +916,12 @@ def staged_random_search_cv(
             dtype=distance_dtype,
             n_jobs=distance_cache_n_jobs,
             memory_fraction=distance_cache_memory_fraction,
+        )
+        scoring_distance_cache = _prepare_scoring_distance_cache(
+            distance_cache,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
+            dtype=distance_dtype,
         )
         time_cache_end: float = perf_counter()
         cache_timing_label = (
@@ -972,7 +979,7 @@ def staged_random_search_cv(
         blas_threads=random_search_blas_threads,
         refit=refit,
         stage_name="Stage 1",
-        distance_cache=distance_cache,
+        distance_cache=scoring_distance_cache,
         cached_scoring_backend=cached_scoring_backend,
         pytorch_device=pytorch_device,
         pytorch_candidate_batch_size=pytorch_candidate_batch_size,
@@ -1021,7 +1028,7 @@ def staged_random_search_cv(
         blas_threads=random_search_blas_threads,
         refit=refit,
         stage_name="Stage 2",
-        distance_cache=distance_cache,
+        distance_cache=scoring_distance_cache,
         cached_scoring_backend=cached_scoring_backend,
         pytorch_device=pytorch_device,
         pytorch_candidate_batch_size=pytorch_candidate_batch_size,
@@ -1089,7 +1096,7 @@ def staged_random_search_cv(
             blas_threads=random_search_blas_threads,
             refit=refit,
             stage_name="Stage 3",
-            distance_cache=distance_cache,
+            distance_cache=scoring_distance_cache,
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
@@ -1171,7 +1178,7 @@ def staged_random_search_cv(
             n_trials=n_trials_bayesian,
             prefix=prefix,
             stage_name="Bayesian search",
-            distance_cache=distance_cache,
+            distance_cache=scoring_distance_cache,
             kernel_weight_center=best_random_params["kernel_weights"],
             kernel_weight_logit_radius=bayesian_weight_logit_radius,
             cached_scoring_backend=cached_scoring_backend,
@@ -1402,6 +1409,32 @@ def _maybe_build_distance_cache(
     except UnsupportedDistanceKernelError as exc:
         logger.info(f"Distance cache disabled: {exc}")
         return None
+
+
+def _prepare_scoring_distance_cache(
+    distance_cache,
+    *,
+    cached_scoring_backend: str,
+    pytorch_device: str | None,
+    dtype,
+):
+    if distance_cache is None:
+        return None
+
+    if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
+        return distance_cache
+
+    from pytorch_backend import distance_cache_to_pytorch
+
+    logger.info(
+        "Transferring distance cache to PyTorch device %s for cached scoring.",
+        pytorch_device,
+    )
+    return distance_cache_to_pytorch(
+        distance_cache,
+        device=pytorch_device,
+        dtype=dtype,
+    )
 
 
 def _clone_with_params(estimator, *, prefix: str, **params):

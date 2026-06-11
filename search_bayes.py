@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
 from cached_scoring import (
+    normalize_cached_scoring_backend,
     resolve_candidate_hyperparameter_arrays,
     score_candidates_from_cache,
     score_estimator_params_from_cache,
@@ -82,6 +83,11 @@ def fit_bayesian_search(
             "kernel_weight_logit_radius must be positive, "
             f"got {kernel_weight_logit_radius}."
         )
+    distance_cache = _prepare_bayesian_distance_cache(
+        distance_cache,
+        cached_scoring_backend=cached_scoring_backend,
+        pytorch_device=pytorch_device,
+    )
     sampler_seed = random_state if isinstance(random_state, int) else None
     sampler = optuna.samplers.TPESampler(seed=sampler_seed)
     study = optuna.create_study(direction="maximize", sampler=sampler)
@@ -222,6 +228,34 @@ def fit_bayesian_search(
         best_score_=float(study.best_value),
         best_split_scores_=best_split_scores,
         search_history_=bayesian_search_history(study, scoring=scoring),
+    )
+
+
+def _prepare_bayesian_distance_cache(
+    distance_cache,
+    *,
+    cached_scoring_backend: str,
+    pytorch_device: str | None,
+):
+    if distance_cache is None:
+        return None
+
+    if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
+        return distance_cache
+
+    from pytorch_backend import TorchDistanceCache, distance_cache_to_pytorch
+
+    if isinstance(distance_cache, TorchDistanceCache):
+        return distance_cache
+
+    logger.info(
+        "Transferring Bayesian distance cache to PyTorch device %s.",
+        pytorch_device,
+    )
+    return distance_cache_to_pytorch(
+        distance_cache,
+        device=pytorch_device,
+        dtype=distance_cache.folds[0].train_distances[0].dtype,
     )
 
 
