@@ -23,6 +23,7 @@ class TorchFoldDistanceCache:
     validation_train_distances: list[Any]
     y_train_transformed: Any
     y_validation: NDArray
+    y_validation_torch: Any
     target_transformer: object | None
 
 
@@ -130,6 +131,12 @@ def distance_cache_to_pytorch(
                 dtype=resolved_dtype,
             ),
             y_validation=np.asarray(fold.y_validation, dtype=float).reshape(-1),
+            y_validation_torch=as_torch_tensor(
+                fold.y_validation,
+                torch=torch,
+                device=resolved_device,
+                dtype=resolved_dtype,
+            ).reshape(-1),
             target_transformer=fold.target_transformer,
         )
         for fold in cache.folds
@@ -488,6 +495,10 @@ def _score_candidate_batch_for_fold(
         ]
         return np.asarray(scores, dtype=float)
 
+    torch_scores = _score_prediction_batch_pytorch(fold, y_pred_batch, scoring)
+    if torch_scores is not None:
+        return torch_scores.detach().cpu().numpy().astype(float, copy=False)
+
     y_pred_batch_np = _inverse_transform_prediction_batch(fold, y_pred_batch)
     return np.asarray(
         [
@@ -550,6 +561,108 @@ def _cholesky_solve_spd_batch(K_train, rhs):
     if bool(torch.any(info != 0).item()):
         raise RuntimeError("Cholesky factorization failed for one or more candidates.")
     return torch.cholesky_solve(rhs, factor, upper=False)
+
+
+def _score_prediction_batch_pytorch(
+    fold: TorchFoldDistanceCache,
+    y_pred_batch,
+    scoring,
+):
+    if not isinstance(scoring, str):
+        return None
+
+    torch = require_torch()
+    y_pred = _inverse_transform_prediction_batch_pytorch(fold, y_pred_batch)
+    if y_pred is None:
+        return None
+
+    y_true = fold.y_validation_torch.reshape(1, -1)
+    diff = y_pred - y_true
+
+    if scoring == "neg_mean_absolute_error":
+        return -torch.mean(torch.abs(diff), dim=1)
+    if scoring == "neg_mean_squared_error":
+        return -torch.mean(diff * diff, dim=1)
+    if scoring == "neg_root_mean_squared_error":
+        return -torch.sqrt(torch.mean(diff * diff, dim=1))
+    if scoring == "r2":
+        ss_res = torch.sum(diff * diff, dim=1)
+        y_centered = y_true - torch.mean(y_true, dim=1, keepdim=True)
+        ss_tot = torch.sum(y_centered * y_centered, dim=1)
+        raw_scores = 1.0 - ss_res / ss_tot
+        perfect_scores = torch.ones_like(raw_scores)
+        imperfect_scores = torch.zeros_like(raw_scores)
+        finite_constant_scores = torch.where(
+            ss_res == 0.0,
+            perfect_scores,
+            imperfect_scores,
+        )
+        return torch.where(ss_tot == 0.0, finite_constant_scores, raw_scores)
+
+    return None
+
+
+def _inverse_transform_prediction_batch_pytorch(
+    fold: TorchFoldDistanceCache,
+    y_pred_batch,
+):
+    return _inverse_transform_tensor_pytorch(fold.target_transformer, y_pred_batch)
+
+
+def _inverse_transform_tensor_pytorch(transformer, values):
+    if transformer is None:
+        return values
+
+    class_name = transformer.__class__.__name__
+    if class_name == "Pipeline":
+        out = values
+        for _, step in reversed(transformer.steps):
+            out = _inverse_transform_tensor_pytorch(step, out)
+            if out is None:
+                return None
+        return out
+
+    if class_name == "StandardScaler":
+        return _inverse_standard_scaler_pytorch(transformer, values)
+
+    if class_name == "FunctionTransformer":
+        return _inverse_function_transformer_pytorch(transformer, values)
+
+    return None
+
+
+def _inverse_standard_scaler_pytorch(transformer, values):
+    torch = require_torch()
+    scale = getattr(transformer, "scale_", None)
+    mean = getattr(transformer, "mean_", None)
+    if scale is None or mean is None:
+        return None
+
+    scale = np.asarray(scale, dtype=float).reshape(-1)
+    mean = np.asarray(mean, dtype=float).reshape(-1)
+    if scale.size != 1 or mean.size != 1:
+        return None
+
+    scale_t = torch.as_tensor(scale[0], dtype=values.dtype, device=values.device)
+    mean_t = torch.as_tensor(mean[0], dtype=values.dtype, device=values.device)
+    return values * scale_t + mean_t
+
+
+def _inverse_function_transformer_pytorch(transformer, values):
+    torch = require_torch()
+    inverse_func = getattr(transformer, "inverse_func", None)
+    if inverse_func is None:
+        return values
+
+    func_name = getattr(inverse_func, "__name__", "")
+    if func_name in {"_identity", "identity"}:
+        return values
+    if inverse_func is np.exp or func_name == "exp":
+        return torch.exp(values)
+    if inverse_func is np.expm1 or func_name == "expm1":
+        return torch.expm1(values)
+
+    return None
 
 
 def _inverse_transform_prediction_batch(
