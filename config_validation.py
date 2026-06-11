@@ -140,6 +140,10 @@ def validate_config() -> None:
     ):
         raise ValueError("`KRR_PYTORCH_CANDIDATE_BATCH_SIZE` must be a positive int.")
 
+    bayesian_batch_size = getattr(config, "KRR_BAYESIAN_BATCH_SIZE", 1)
+    if type(bayesian_batch_size) is not int or bayesian_batch_size < 0:
+        raise ValueError("`KRR_BAYESIAN_BATCH_SIZE` must be a non-negative int.")
+
     if (
         type(config.KRR_DISTANCE_BLOCK_SIZE) is not int
         or config.KRR_DISTANCE_BLOCK_SIZE <= 0

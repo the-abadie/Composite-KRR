@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+from time import monotonic
 
 import logging
 import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
-from cached_scoring import score_estimator_params_from_cache
+from cached_scoring import (
+    resolve_candidate_hyperparameter_arrays,
+    score_candidates_from_cache,
+    score_estimator_params_from_cache,
+)
 from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
@@ -56,6 +61,7 @@ def fit_bayesian_search(
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_candidate_batch_size: int = 1,
+    bayesian_batch_size: int = 1,
 ) -> BayesianSearchResult:
     if optuna is None:
         raise ImportError("Optuna is required for the optional Bayesian stage.")
@@ -65,6 +71,8 @@ def fit_bayesian_search(
         raise ValueError(f"n_components must be positive, got {n_components}.")
     if patience is not None and patience <= 0:
         raise ValueError(f"patience must be positive when set, got {patience}.")
+    if type(bayesian_batch_size) is not int or bayesian_batch_size < 0:
+        raise ValueError("bayesian_batch_size must be a non-negative int.")
 
     _validate_log_bounds("alpha_bounds", alpha_bounds)
     component_gamma_bounds = _as_component_bounds(gamma_bounds, n_components)
@@ -159,12 +167,41 @@ def fit_bayesian_search(
             )
             study.stop()
 
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        timeout=timeout,
-        callbacks=[log_progress, stop_after_patience],
-    )
+    if bayesian_batch_size <= 1:
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=timeout,
+            callbacks=[log_progress, stop_after_patience],
+        )
+    else:
+        _optimize_bayesian_search_batched(
+            study,
+            estimator,
+            X,
+            y,
+            n_components=n_components,
+            alpha_bounds=alpha_bounds,
+            gamma_bounds=component_gamma_bounds,
+            kernel_weight_bounds=kernel_weight_bounds,
+            kernel_weight_center=kernel_weight_center,
+            kernel_weight_logit_radius=kernel_weight_logit_radius,
+            scoring=scoring,
+            cv=cv,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+            timeout=timeout,
+            patience=patience,
+            n_trials=n_trials,
+            prefix=prefix,
+            stage_name=stage_name,
+            distance_cache=distance_cache,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
+            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+            bayesian_batch_size=bayesian_batch_size,
+            milestones=milestones,
+        )
 
     best_params = _params_from_bayesian_trial(
         study.best_trial.params,
@@ -186,6 +223,217 @@ def fit_bayesian_search(
         best_split_scores_=best_split_scores,
         search_history_=bayesian_search_history(study, scoring=scoring),
     )
+
+
+def _optimize_bayesian_search_batched(
+    study,
+    estimator,
+    X,
+    y,
+    *,
+    n_components: int,
+    alpha_bounds: tuple[float, float],
+    gamma_bounds: list[tuple[float, float]],
+    kernel_weight_bounds: tuple[float, float],
+    kernel_weight_center,
+    kernel_weight_logit_radius: float,
+    scoring: str,
+    cv,
+    n_jobs,
+    blas_threads: int | None,
+    timeout: float | None,
+    patience: int | None,
+    n_trials: int,
+    prefix: str,
+    stage_name: str,
+    distance_cache,
+    cached_scoring_backend: str,
+    pytorch_device: str | None,
+    pytorch_candidate_batch_size: int,
+    bayesian_batch_size: int,
+    milestones: set[int],
+) -> None:
+    start_time = monotonic()
+    completed_trials = 0
+
+    while completed_trials < n_trials:
+        if timeout is not None and monotonic() - start_time >= timeout:
+            logger.warning(
+                f"{stage_name} stopped after reaching timeout "
+                f"({timeout:.1f} seconds)."
+            )
+            return
+
+        batch_size = min(bayesian_batch_size, n_trials - completed_trials)
+        trials = []
+        params_batch = []
+        for _ in range(batch_size):
+            trial = study.ask()
+            params = _suggest_bayesian_params(
+                trial,
+                n_components=n_components,
+                alpha_bounds=alpha_bounds,
+                gamma_bounds=gamma_bounds,
+                kernel_weight_bounds=kernel_weight_bounds,
+                kernel_weight_center=kernel_weight_center,
+                kernel_weight_logit_radius=kernel_weight_logit_radius,
+            )
+            trials.append(trial)
+            params_batch.append(params)
+
+        split_scores = _score_bayesian_param_batch(
+            estimator,
+            X,
+            y,
+            params_batch,
+            scoring=scoring,
+            cv=cv,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+            prefix=prefix,
+            distance_cache=distance_cache,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
+            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+        )
+        mean_scores = _mean_finite_scores(split_scores)
+
+        stop_requested = False
+        for trial, mean_score, trial_split_scores in zip(
+            trials,
+            mean_scores,
+            split_scores,
+        ):
+            value = float(mean_score) if np.isfinite(mean_score) else -np.inf
+            if np.all(np.isfinite(trial_split_scores)):
+                trial.set_user_attr("split_scores", trial_split_scores.tolist())
+
+            study.tell(trial, value)
+            completed_trials += 1
+            _log_batched_progress(
+                stage_name,
+                completed_trials,
+                n_trials,
+                milestones,
+            )
+            if not stop_requested:
+                stop_requested = _batched_patience_stop_requested(
+                    study,
+                    patience=patience,
+                    stage_name=stage_name,
+                )
+
+        if stop_requested:
+            return
+
+
+def _score_bayesian_param_batch(
+    estimator,
+    X,
+    y,
+    params_batch: list[dict],
+    *,
+    scoring: str,
+    cv,
+    n_jobs,
+    blas_threads: int | None,
+    prefix: str,
+    distance_cache,
+    cached_scoring_backend: str,
+    pytorch_device: str | None,
+    pytorch_candidate_batch_size: int,
+) -> np.ndarray:
+    if distance_cache is None:
+        return np.asarray(
+            [
+                cross_val_score(
+                    _clone_with_params(estimator, prefix=prefix, **params),
+                    X,
+                    y,
+                    scoring=scoring,
+                    cv=cv,
+                    n_jobs=n_jobs,
+                    error_score="raise",
+                )
+                for params in params_batch
+            ],
+            dtype=float,
+        )
+
+    prefixed_params = [_prefix_params(params, prefix) for params in params_batch]
+    alphas, gammas, weights = resolve_candidate_hyperparameter_arrays(
+        estimator,
+        prefixed_params,
+        distance_cache,
+    )
+    return score_candidates_from_cache(
+        alphas=alphas,
+        gammas=gammas,
+        weights=weights,
+        cache=distance_cache,
+        scoring=scoring,
+        backend=cached_scoring_backend,
+        n_jobs=n_jobs,
+        blas_threads=blas_threads,
+        pytorch_device=pytorch_device,
+        pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
+        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+    )
+
+
+def _mean_finite_scores(split_scores: np.ndarray) -> np.ndarray:
+    split_scores = np.asarray(split_scores, dtype=float)
+    mean_scores = np.full(split_scores.shape[0], -np.inf, dtype=float)
+    valid_rows = np.all(np.isfinite(split_scores), axis=1)
+    if np.any(valid_rows):
+        mean_scores[valid_rows] = np.mean(split_scores[valid_rows], axis=1)
+    return mean_scores
+
+
+def _log_batched_progress(
+    stage_name: str,
+    completed_trials: int,
+    n_trials: int,
+    milestones: set[int],
+) -> None:
+    if completed_trials in milestones:
+        logger.info(
+            f"{stage_name} progress: "
+            f"{completed_trials}/{n_trials} ({completed_trials / n_trials:.0%})"
+        )
+
+
+def _batched_patience_stop_requested(
+    study,
+    *,
+    patience: int | None,
+    stage_name: str,
+) -> bool:
+    if patience is None:
+        return False
+
+    completed_trials = [
+        trial
+        for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    if not completed_trials:
+        return False
+
+    latest_trial = completed_trials[-1]
+    if latest_trial.value is None:
+        return False
+
+    trials_since_improvement = latest_trial.number - study.best_trial.number
+    if trials_since_improvement < patience:
+        return False
+
+    logger.warning(
+        f"{stage_name} stopped after {trials_since_improvement} "
+        "trials without improvement "
+        f"(best trial {study.best_trial.number + 1})."
+    )
+    return True
 
 
 def _suggest_bayesian_params(

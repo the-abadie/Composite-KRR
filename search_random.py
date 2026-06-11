@@ -882,6 +882,7 @@ def staged_random_search_cv(
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_candidate_batch_size: int = 1,
+    bayesian_batch_size: int = 1,
 ) -> StagedRandomSearchResult:
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
@@ -1176,6 +1177,7 @@ def staged_random_search_cv(
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+            bayesian_batch_size=bayesian_batch_size,
         )
         time_bayes_end:float = perf_counter()
         time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
