@@ -533,7 +533,7 @@ def _predict_batch_from_torch_fold(
     K_train[:, diag, diag] = K_train[:, diag, diag] + alphas_t[:, None]
 
     rhs = fold.y_train_transformed.reshape(1, -1, 1).expand(K_train.shape[0], -1, -1)
-    dual_coef = torch.linalg.solve(K_train, rhs).squeeze(-1)
+    dual_coef = _cholesky_solve_spd_batch(K_train, rhs).squeeze(-1)
 
     K_validation = composite_kernel_from_distances_pytorch(
         fold.validation_train_distances,
@@ -542,6 +542,14 @@ def _predict_batch_from_torch_fold(
         kernel_types=kernel_types,
     )
     return torch.bmm(K_validation, dual_coef.unsqueeze(-1)).squeeze(-1)
+
+
+def _cholesky_solve_spd_batch(K_train, rhs):
+    torch = require_torch()
+    factor, info = torch.linalg.cholesky_ex(K_train, upper=False, check_errors=False)
+    if bool(torch.any(info != 0).item()):
+        raise RuntimeError("Cholesky factorization failed for one or more candidates.")
+    return torch.cholesky_solve(rhs, factor, upper=False)
 
 
 def _inverse_transform_prediction_batch(
@@ -557,7 +565,7 @@ def _inverse_transform_prediction_batch(
 
 def _is_torch_linalg_error(exc: RuntimeError) -> bool:
     message = str(exc).lower()
-    return "linalg" in message or "singular" in message
+    return "linalg" in message or "singular" in message or "cholesky" in message
 
 
 def _validate_candidate_arrays(

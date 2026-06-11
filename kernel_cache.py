@@ -9,7 +9,7 @@ import threading
 from joblib import Parallel, delayed, effective_n_jobs
 import numpy as np
 from numpy.typing import NDArray
-from scipy.linalg import solve
+from scipy.linalg import cho_factor, cho_solve
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.metrics import get_scorer
 from threadpoolctl import threadpool_limits
@@ -718,11 +718,15 @@ def predict_fold_from_distances(
     )
     K_train[np.diag_indices_from(K_train)] += alpha
 
-    dual_coef = solve(
+    cholesky_factor = cho_factor(
         K_train,
-        fold.y_train_transformed,
-        assume_a="pos",
+        lower=True,
         overwrite_a=True,
+        check_finite=False,
+    )
+    dual_coef = cho_solve(
+        cholesky_factor,
+        fold.y_train_transformed,
         check_finite=False,
     )
     K_validation = composite_kernel_from_distances(
