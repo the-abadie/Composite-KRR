@@ -1,30 +1,14 @@
 SEED = 1
 VERBOSITY = 2
 
-RUN_NAME = "QM7_OVERLAP_SEP"
+RUN_NAME = "QM7_OVERLAP_CONCAT_DCT_100_0.70frac"
 
-# X_PATHS = [
-#     "sample/QM7/QM7_overlap_N_0_nosym.npy",
-#     "sample/QM7/QM7_overlap_N_1.npy", "sample/QM7/QM7_overlap_N_2.npy",
-#     "sample/QM7/QM7_overlap_N_3.npy", "sample/QM7/QM7_overlap_N_4.npy",
-# ]
+X_MAX = 10
+# X_PATHS = [f"sample/QM7/QM7_overlap_leg3_dct_{i}.npy" for i in range(0,  X_MAX+1)]
+# X_NAMES = [f"overlap_leg3_dct_{i:02}" for i in range(0,  X_MAX+1)]
 
-# X_NAMES = [
-#     "leg_7",
-#     "1B ",
-#     "2Bs", "2Ba",
-#     "3Bs", "3Ba",
-# ]
-
-# X_NORMS = [
-#     "standard",
-#     "standard", "standard",
-#     "standard", "standard",
-# ]
-
-X_MAX = 4
-X_PATHS = [f"sample/QM7/QM7_overlap_{i}.npy" for i in range(0,  X_MAX+1)]
-X_NAMES = [f"overlap_mk_i_{i:02}" for i in range(0,  X_MAX+1)]
+X_PATHS = ["sample/QM7/QM7_overlap_leg3_dct_concat.npy"]
+X_NAMES = ["LEG3 Overlap DCT Concatenated"]
 X_NORMS = ["standard" for _ in X_PATHS]
 # X_PCA_COMPONENTS = [0.99 for _ in X_PATHS]
 # X_PCA_WHITEN = [False for _ in X_PATHS]
@@ -40,7 +24,7 @@ USE_PREDEFINED_SPLITS = False
 # PREDEF_TESTING_IDX_PATH  = "predef_testing_idx.npy"
 
 N_SAMPLES = 7165
-TRAIN_VAL_SPLIT = 0.15
+TRAIN_VAL_SPLIT = 0.70
 N_KFOLD = 5
 STRATIFY = True
 N_STRATA = 5
@@ -49,14 +33,14 @@ KRR_KERNEL = "rbf"
 
 KRR_ALPHA_BOUNDS = (1e-9, 1e2)
 KRR_GAMMA_BOUNDS = (1e-9, 1e2)
-KRR_RANDOM_SEARCH_STAGE1 = 5000
-KRR_RANDOM_SEARCH_STAGE2 = 5000
+KRR_RANDOM_SEARCH_STAGE1 = 75
+KRR_RANDOM_SEARCH_STAGE2 = 75
 KRR_RANDOM_SEARCH_STAGE3 = 0
 KRR_TOP_K_FRACTION = 0.25
 KRR_TOP_K_MIN_CANDIDATES = 5
-KRR_BAYESIAN_SEARCH_TRIALS = 2000
+KRR_BAYESIAN_SEARCH_TRIALS = 50
 KRR_BAYESIAN_SEARCH_TIMEOUT = None
-KRR_BAYESIAN_SEARCH_PATIENCE = 1000
+KRR_BAYESIAN_SEARCH_PATIENCE = 25
 KRR_BAYESIAN_BATCH_SIZE = 1  # 0 or 1 uses Optuna's default sequential optimize loop.
 
 KRR_EVALUATE_KERNEL_CONTRIBUTIONS = True

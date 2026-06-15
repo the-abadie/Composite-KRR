@@ -75,6 +75,9 @@ def resolve_torch_dtype(torch, dtype=None):
     if dtype is None:
         return torch.float64
 
+    if dtype in {torch.float64, torch.float32}:
+        return dtype
+
     dtype = np.dtype(dtype)
     if dtype == np.dtype(np.float64):
         return torch.float64

@@ -15,7 +15,12 @@ from sklearn.metrics import get_scorer
 from threadpoolctl import threadpool_limits
 
 from config import VERBOSITY
-from kernels import pairwise_cross_lp_distance, pairwise_self_lp_distance
+from kernels import (
+    pairwise_cross_lp_distance,
+    pairwise_cross_lp_distance_pytorch,
+    pairwise_self_lp_distance,
+    pairwise_self_lp_distance_pytorch,
+)
 from preprocess import make_data_preprocessor
 from utilities import configure_logging
 
@@ -36,8 +41,8 @@ class FoldDistanceCache:
     fold_id: int
     train_indices: NDArray
     validation_indices: NDArray
-    train_distances: list[NDArray]
-    validation_train_distances: list[NDArray]
+    train_distances: list[object]
+    validation_train_distances: list[object]
     y_train_transformed: NDArray
     y_validation: NDArray
     target_transformer: object | None
@@ -57,8 +62,8 @@ class _FoldDistanceMetadata:
 class _ComponentFoldDistanceCache:
     fold_index: int
     component_index: int
-    train_distance: NDArray
-    validation_train_distance: NDArray
+    train_distance: object
+    validation_train_distance: object
 
 
 @dataclass(frozen=True)
@@ -82,15 +87,39 @@ class DistanceCache:
     def nbytes(self) -> int:
         total = 0
         for fold in self.folds:
-            total += sum(distance.nbytes for distance in fold.train_distances)
+            total += sum(array_nbytes(distance) for distance in fold.train_distances)
             total += sum(
-                distance.nbytes for distance in fold.validation_train_distances
+                array_nbytes(distance)
+                for distance in fold.validation_train_distances
             )
         return total
 
 
 class UnsupportedDistanceKernelError(ValueError):
     pass
+
+
+def normalize_distance_backend(backend: str) -> str:
+    backend = str(backend).lower()
+    if backend in {"numpy", "np", "cpu"}:
+        return "numpy"
+    if backend in {"pytorch", "torch", "gpu", "cuda", "rocm"}:
+        return "pytorch"
+    raise ValueError(
+        'distance backend must be "numpy" or "pytorch", '
+        f"got {backend!r}."
+    )
+
+
+def array_nbytes(array) -> int:
+    nbytes = getattr(array, "nbytes", None)
+    if nbytes is not None:
+        return int(nbytes)
+
+    if hasattr(array, "numel") and hasattr(array, "element_size"):
+        return int(array.numel() * array.element_size())
+
+    return int(np.asarray(array).nbytes)
 
 
 class _PredictionOnlyRegressor(RegressorMixin, BaseEstimator):
@@ -117,8 +146,11 @@ def build_distance_cache(
     use_scipy_for_p1_p2: bool = True,
     n_jobs: int | None = -1,
     memory_fraction: float = 0.80,
+    distance_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
 ) -> DistanceCache:
     dtype = np.dtype(dtype)
+    distance_backend = normalize_distance_backend(distance_backend)
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
     y = np.asarray(y, dtype=dtype).reshape(-1)
     if not 0 < memory_fraction <= 1:
@@ -190,6 +222,8 @@ def build_distance_cache(
     ]
     n_cache_tasks = len(fold_metadata) * len(X_blocks)
     cache_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=n_cache_tasks)
+    if distance_backend == "pytorch":
+        cache_n_jobs = 1
     logger.debug(
         "Estimated distance cache memory: %.2f MiB.",
         estimated_nbytes / (1024**2),
@@ -202,10 +236,11 @@ def build_distance_cache(
             100 * memory_fraction,
         )
     logger.info(
-        "Precomputing %s fold x %s descriptor distance cache with "
-        "%s worker thread(s).",
+        "Precomputing %s fold x %s descriptor distance cache with %s "
+        "backend and %s worker thread(s).",
         len(fold_metadata),
         len(X_blocks),
+        distance_backend,
         cache_n_jobs,
     )
 
@@ -224,6 +259,8 @@ def build_distance_cache(
                 block_size=block_size,
                 dtype=dtype,
                 use_scipy_for_p1_p2=use_scipy_for_p1_p2,
+                distance_backend=distance_backend,
+                pytorch_device=pytorch_device,
             )
             for fold_index, metadata in enumerate(fold_metadata)
             for component_index, (
@@ -252,6 +289,8 @@ def build_distance_cache(
                     block_size=block_size,
                     dtype=dtype,
                     use_scipy_for_p1_p2=use_scipy_for_p1_p2,
+                    distance_backend=distance_backend,
+                    pytorch_device=pytorch_device,
                 )
                 for fold_index, metadata in enumerate(fold_metadata)
                 for component_index, (
@@ -329,6 +368,8 @@ def build_component_fold_distance_cache(
     block_size: int,
     dtype: np.dtype,
     use_scipy_for_p1_p2: bool,
+    distance_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
 ) -> _ComponentFoldDistanceCache:
     preprocessor = make_data_preprocessor(
         normalization,
@@ -338,18 +379,34 @@ def build_component_fold_distance_cache(
     X_train = preprocessor.fit_transform(X_block[train_idx])
     X_validation = preprocessor.transform(X_block[validation_idx])
 
-    return _ComponentFoldDistanceCache(
-        fold_index=fold_index,
-        component_index=component_index,
-        train_distance=pairwise_self_lp_distance(
+    if normalize_distance_backend(distance_backend) == "pytorch":
+        train_distance = pairwise_self_lp_distance_pytorch(
+            X_train,
+            p=spec.p,
+            squared=spec.squared,
+            block_size=block_size,
+            dtype=dtype,
+            device=pytorch_device,
+        )
+        validation_train_distance = pairwise_cross_lp_distance_pytorch(
+            X_validation,
+            X_train,
+            p=spec.p,
+            squared=spec.squared,
+            block_size=block_size,
+            dtype=dtype,
+            device=pytorch_device,
+        )
+    else:
+        train_distance = pairwise_self_lp_distance(
             X_train,
             p=spec.p,
             squared=spec.squared,
             block_size=block_size,
             dtype=dtype,
             use_scipy_for_p1_p2=use_scipy_for_p1_p2,
-        ),
-        validation_train_distance=pairwise_cross_lp_distance(
+        )
+        validation_train_distance = pairwise_cross_lp_distance(
             X_validation,
             X_train,
             p=spec.p,
@@ -357,7 +414,13 @@ def build_component_fold_distance_cache(
             block_size=block_size,
             dtype=dtype,
             use_scipy_for_p1_p2=use_scipy_for_p1_p2,
-        ),
+        )
+
+    return _ComponentFoldDistanceCache(
+        fold_index=fold_index,
+        component_index=component_index,
+        train_distance=train_distance,
+        validation_train_distance=validation_train_distance,
     )
 
 

@@ -659,6 +659,9 @@ def _gamma_center_from_distance_medians(
 
 
 def _positive_finite_median(values, *, max_values: int = 2_000_000) -> float:
+    if _is_torch_tensor(values):
+        return _positive_finite_median_torch(values, max_values=max_values)
+
     values = np.asarray(values).ravel()
     if values.size == 0:
         return np.nan
@@ -670,6 +673,31 @@ def _positive_finite_median(values, *, max_values: int = 2_000_000) -> float:
         return np.nan
 
     return float(np.median(sample))
+
+
+def _positive_finite_median_torch(values, *, max_values: int) -> float:
+    from importlib import import_module
+
+    torch = import_module("torch")
+    values = values.reshape(-1)
+    if values.numel() == 0:
+        return np.nan
+
+    step = max(1, int(np.ceil(values.numel() / max_values)))
+    sample = values[::step]
+    sample = sample[torch.isfinite(sample) & (sample > 0)]
+    if sample.numel() == 0:
+        return np.nan
+
+    return float(torch.median(sample).detach().cpu().item())
+
+
+def _is_torch_tensor(values) -> bool:
+    return (
+        values.__class__.__module__.startswith("torch")
+        and hasattr(values, "detach")
+        and hasattr(values, "numel")
+    )
 
 
 def _narrow_log_bounds_around(
@@ -916,6 +944,8 @@ def staged_random_search_cv(
             dtype=distance_dtype,
             n_jobs=distance_cache_n_jobs,
             memory_fraction=distance_cache_memory_fraction,
+            cached_scoring_backend=cached_scoring_backend,
+            pytorch_device=pytorch_device,
         )
         scoring_distance_cache = _prepare_scoring_distance_cache(
             distance_cache,
@@ -1367,6 +1397,8 @@ def _maybe_build_distance_cache(
     dtype: np.dtype | type | str,
     n_jobs: int | None,
     memory_fraction: float,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
 ):
     regressor = extract_regressor(estimator)
     names = resolve_sequence("names", regressor.names, n_components, "desc")
@@ -1389,6 +1421,7 @@ def _maybe_build_distance_cache(
         False,
     )
     target_transformer = extract_target_transformer(estimator)
+    distance_backend = normalize_cached_scoring_backend(cached_scoring_backend)
 
     try:
         return build_distance_cache(
@@ -1405,6 +1438,8 @@ def _maybe_build_distance_cache(
             dtype=np.dtype(dtype),
             n_jobs=n_jobs,
             memory_fraction=memory_fraction,
+            distance_backend=distance_backend,
+            pytorch_device=pytorch_device,
         )
     except UnsupportedDistanceKernelError as exc:
         logger.info(f"Distance cache disabled: {exc}")
@@ -1424,7 +1459,10 @@ def _prepare_scoring_distance_cache(
     if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
         return distance_cache
 
-    from pytorch_backend import distance_cache_to_pytorch
+    from pytorch_backend import TorchDistanceCache, distance_cache_to_pytorch
+
+    if isinstance(distance_cache, TorchDistanceCache):
+        return distance_cache
 
     logger.info(
         "Transferring distance cache to PyTorch device %s for cached scoring.",

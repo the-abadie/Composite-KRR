@@ -245,7 +245,7 @@ if len(idx_test) > 0:
     logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
 
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
-    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=100, OUTPUT_DIR=config.OUTPUT_DIR)
+    postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=250, OUTPUT_DIR=config.OUTPUT_DIR)
 
 postprocess.plot_random_search_validation_error(
     search_result,
