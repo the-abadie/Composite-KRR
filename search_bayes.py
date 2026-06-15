@@ -61,6 +61,7 @@ def fit_bayesian_search(
     kernel_weight_logit_radius: float = 1.5,
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
+    pytorch_devices=None,
     pytorch_candidate_batch_size: int = 1,
     bayesian_batch_size: int = 1,
 ) -> BayesianSearchResult:
@@ -87,6 +88,7 @@ def fit_bayesian_search(
         distance_cache,
         cached_scoring_backend=cached_scoring_backend,
         pytorch_device=pytorch_device,
+        pytorch_devices=pytorch_devices,
     )
     sampler_seed = random_state if isinstance(random_state, int) else None
     sampler = optuna.samplers.TPESampler(seed=sampler_seed)
@@ -137,6 +139,7 @@ def fit_bayesian_search(
                 n_jobs=n_jobs,
                 blas_threads=blas_threads,
                 pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
                 pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
                 pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             )
@@ -204,6 +207,7 @@ def fit_bayesian_search(
             distance_cache=distance_cache,
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
+            pytorch_devices=pytorch_devices,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             bayesian_batch_size=bayesian_batch_size,
             milestones=milestones,
@@ -236,6 +240,7 @@ def _prepare_bayesian_distance_cache(
     *,
     cached_scoring_backend: str,
     pytorch_device: str | None,
+    pytorch_devices,
 ):
     if distance_cache is None:
         return None
@@ -255,6 +260,7 @@ def _prepare_bayesian_distance_cache(
     return distance_cache_to_pytorch(
         distance_cache,
         device=pytorch_device,
+        devices=pytorch_devices,
         dtype=distance_cache.folds[0].train_distances[0].dtype,
     )
 
@@ -283,6 +289,7 @@ def _optimize_bayesian_search_batched(
     distance_cache,
     cached_scoring_backend: str,
     pytorch_device: str | None,
+    pytorch_devices,
     pytorch_candidate_batch_size: int,
     bayesian_batch_size: int,
     milestones: set[int],
@@ -328,6 +335,7 @@ def _optimize_bayesian_search_batched(
             distance_cache=distance_cache,
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
+            pytorch_devices=pytorch_devices,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
         )
         mean_scores = _mean_finite_scores(split_scores)
@@ -375,6 +383,7 @@ def _score_bayesian_param_batch(
     distance_cache,
     cached_scoring_backend: str,
     pytorch_device: str | None,
+    pytorch_devices,
     pytorch_candidate_batch_size: int,
 ) -> np.ndarray:
     if distance_cache is None:
@@ -410,6 +419,7 @@ def _score_bayesian_param_batch(
         n_jobs=n_jobs,
         blas_threads=blas_threads,
         pytorch_device=pytorch_device,
+        pytorch_devices=pytorch_devices,
         pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
         pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )

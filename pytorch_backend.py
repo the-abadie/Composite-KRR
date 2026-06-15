@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
@@ -71,6 +72,51 @@ def resolve_torch_device(torch, device: str | None = "auto"):
     return resolved
 
 
+def resolve_torch_devices(
+    torch,
+    devices=None,
+    *,
+    fallback_device: str | None = "auto",
+    max_devices: int | None = None,
+) -> list[Any]:
+    if devices is None:
+        resolved_devices = [resolve_torch_device(torch, fallback_device)]
+    elif isinstance(devices, str):
+        if devices == "auto":
+            if torch.cuda.is_available():
+                device_count = torch.cuda.device_count()
+                resolved_devices = [
+                    torch.device(f"cuda:{index}")
+                    for index in range(device_count)
+                ]
+            else:
+                resolved_devices = [torch.device("cpu")]
+        else:
+            raw_devices = [device.strip() for device in devices.split(",")]
+            raw_devices = [device for device in raw_devices if device]
+            if not raw_devices:
+                raise ValueError("PyTorch device list cannot be empty.")
+            resolved_devices = [
+                resolve_torch_device(torch, device)
+                for device in raw_devices
+            ]
+    else:
+        raw_devices = list(devices)
+        if not raw_devices:
+            raise ValueError("PyTorch device list cannot be empty.")
+        resolved_devices = [
+            resolve_torch_device(torch, device)
+            for device in raw_devices
+        ]
+
+    if max_devices is not None:
+        resolved_devices = resolved_devices[:max_devices]
+    if not resolved_devices:
+        raise ValueError("No PyTorch devices resolved for cached scoring.")
+
+    return resolved_devices
+
+
 def resolve_torch_dtype(torch, dtype=None):
     if dtype is None:
         return torch.float64
@@ -97,52 +143,29 @@ def distance_cache_to_pytorch(
     cache: DistanceCache,
     *,
     device: str | None = "auto",
+    devices=None,
     dtype=None,
 ) -> TorchDistanceCache:
     torch = require_torch()
-    resolved_device = resolve_torch_device(torch, device)
+    resolved_devices = resolve_torch_devices(
+        torch,
+        devices,
+        fallback_device=device,
+        max_devices=len(cache.folds),
+    )
     resolved_dtype = resolve_torch_dtype(
         torch,
         cache.folds[0].train_distances[0].dtype if dtype is None else dtype,
     )
 
     folds = [
-        TorchFoldDistanceCache(
-            fold_id=fold.fold_id,
-            train_distances=[
-                as_torch_tensor(
-                    distance,
-                    torch=torch,
-                    device=resolved_device,
-                    dtype=resolved_dtype,
-                )
-                for distance in fold.train_distances
-            ],
-            validation_train_distances=[
-                as_torch_tensor(
-                    distance,
-                    torch=torch,
-                    device=resolved_device,
-                    dtype=resolved_dtype,
-                )
-                for distance in fold.validation_train_distances
-            ],
-            y_train_transformed=as_torch_tensor(
-                fold.y_train_transformed,
-                torch=torch,
-                device=resolved_device,
-                dtype=resolved_dtype,
-            ),
-            y_validation=np.asarray(fold.y_validation, dtype=float).reshape(-1),
-            y_validation_torch=as_torch_tensor(
-                fold.y_validation,
-                torch=torch,
-                device=resolved_device,
-                dtype=resolved_dtype,
-            ).reshape(-1),
-            target_transformer=fold.target_transformer,
+        _fold_distance_cache_to_pytorch(
+            fold,
+            device=resolved_devices[fold_index % len(resolved_devices)],
+            dtype=resolved_dtype,
+            torch=torch,
         )
-        for fold in cache.folds
+        for fold_index, fold in enumerate(cache.folds)
     ]
 
     return TorchDistanceCache(
@@ -152,8 +175,52 @@ def distance_cache_to_pytorch(
         normalizations=list(cache.normalizations),
         pca_components=list(cache.pca_components),
         pca_whiten=list(cache.pca_whiten),
-        device=resolved_device,
+        device=resolved_devices[0],
         dtype=resolved_dtype,
+    )
+
+
+def _fold_distance_cache_to_pytorch(
+    fold: FoldDistanceCache,
+    *,
+    device,
+    dtype,
+    torch,
+) -> TorchFoldDistanceCache:
+    return TorchFoldDistanceCache(
+        fold_id=fold.fold_id,
+        train_distances=[
+            as_torch_tensor(
+                distance,
+                torch=torch,
+                device=device,
+                dtype=dtype,
+            )
+            for distance in fold.train_distances
+        ],
+        validation_train_distances=[
+            as_torch_tensor(
+                distance,
+                torch=torch,
+                device=device,
+                dtype=dtype,
+            )
+            for distance in fold.validation_train_distances
+        ],
+        y_train_transformed=as_torch_tensor(
+            fold.y_train_transformed,
+            torch=torch,
+            device=device,
+            dtype=dtype,
+        ),
+        y_validation=np.asarray(fold.y_validation, dtype=float).reshape(-1),
+        y_validation_torch=as_torch_tensor(
+            fold.y_validation,
+            torch=torch,
+            device=device,
+            dtype=dtype,
+        ).reshape(-1),
+        target_transformer=fold.target_transformer,
     )
 
 
@@ -397,13 +464,19 @@ def score_candidates_from_cache_pytorch(
     cache: DistanceCache | TorchDistanceCache,
     scoring,
     device: str | None = "auto",
+    devices=None,
     dtype=None,
     candidate_batch_size: int = 1,
 ) -> NDArray:
     torch_cache = (
         cache
         if isinstance(cache, TorchDistanceCache)
-        else distance_cache_to_pytorch(cache, device=device, dtype=dtype)
+        else distance_cache_to_pytorch(
+            cache,
+            device=device,
+            devices=devices,
+            dtype=dtype,
+        )
     )
     torch = require_torch()
     alphas, gammas, weights = _validate_candidate_arrays(
@@ -417,21 +490,88 @@ def score_candidates_from_cache_pytorch(
 
     n_candidates = alphas.shape[0]
     split_scores = np.empty((n_candidates, len(torch_cache.folds)), dtype=float)
-    with torch.no_grad():
-        for fold_index, fold in enumerate(torch_cache.folds):
-            for start in range(0, n_candidates, candidate_batch_size):
-                stop = min(start + candidate_batch_size, n_candidates)
-                batch_scores = _score_candidate_batch_for_fold(
+    if _torch_cache_has_multiple_devices(torch_cache):
+        with ThreadPoolExecutor(
+            max_workers=_torch_cache_device_count(torch_cache)
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _score_all_candidates_for_fold,
+                    fold_index,
                     fold,
-                    alphas=alphas[start:stop],
-                    gammas=gammas[start:stop],
-                    weights=weights[start:stop],
-                    kernel_types=torch_cache.kernel_types,
-                    scoring=scoring,
+                    alphas,
+                    gammas,
+                    weights,
+                    torch_cache.kernel_types,
+                    scoring,
+                    candidate_batch_size,
                 )
-                split_scores[start:stop, fold_index] = batch_scores
+                for fold_index, fold in enumerate(torch_cache.folds)
+            ]
+            for future in futures:
+                fold_index, fold_scores = future.result()
+                split_scores[:, fold_index] = fold_scores
+    else:
+        with torch.no_grad():
+            for fold_index, fold in enumerate(torch_cache.folds):
+                fold_scores = _score_all_candidates_for_fold(
+                    fold_index,
+                    fold,
+                    alphas,
+                    gammas,
+                    weights,
+                    torch_cache.kernel_types,
+                    scoring,
+                    candidate_batch_size,
+                )[1]
+                split_scores[:, fold_index] = fold_scores
 
     return split_scores
+
+
+def _torch_cache_has_multiple_devices(cache: TorchDistanceCache) -> bool:
+    return _torch_cache_device_count(cache) > 1
+
+
+def _torch_cache_device_count(cache: TorchDistanceCache) -> int:
+    return len(
+        {
+            str(fold.y_train_transformed.device)
+            for fold in cache.folds
+        }
+    ) > 1
+
+
+def _score_all_candidates_for_fold(
+    fold_index: int,
+    fold: TorchFoldDistanceCache,
+    alphas: NDArray,
+    gammas: NDArray,
+    weights: NDArray,
+    kernel_types: list[str],
+    scoring,
+    candidate_batch_size: int,
+) -> tuple[int, NDArray]:
+    torch = require_torch()
+    device = fold.y_train_transformed.device
+    if getattr(device, "type", None) == "cuda":
+        torch.cuda.set_device(device)
+
+    n_candidates = alphas.shape[0]
+    fold_scores = np.empty(n_candidates, dtype=float)
+    with torch.no_grad():
+        for start in range(0, n_candidates, candidate_batch_size):
+            stop = min(start + candidate_batch_size, n_candidates)
+            fold_scores[start:stop] = _score_candidate_batch_for_fold(
+                fold,
+                alphas=alphas[start:stop],
+                gammas=gammas[start:stop],
+                weights=weights[start:stop],
+                kernel_types=kernel_types,
+                scoring=scoring,
+            )
+
+    return fold_index, fold_scores
 
 
 def _ensure_torch_fold(

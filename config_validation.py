@@ -129,6 +129,20 @@ def validate_config() -> None:
     if pytorch_device is not None and not isinstance(pytorch_device, str):
         raise ValueError("`KRR_PYTORCH_DEVICE` must be `None` or a string.")
 
+    pytorch_devices = getattr(config, "KRR_PYTORCH_DEVICES", None)
+    if pytorch_devices is not None and not isinstance(pytorch_devices, str):
+        try:
+            pytorch_devices = list(pytorch_devices)
+        except TypeError as exc:
+            raise ValueError(
+                "`KRR_PYTORCH_DEVICES` must be `None`, a string, or a "
+                "sequence of strings."
+            ) from exc
+        if not pytorch_devices:
+            raise ValueError("`KRR_PYTORCH_DEVICES` cannot be an empty sequence.")
+        if not all(isinstance(device, str) for device in pytorch_devices):
+            raise ValueError("`KRR_PYTORCH_DEVICES` must contain only strings.")
+
     pytorch_candidate_batch_size = getattr(
         config,
         "KRR_PYTORCH_CANDIDATE_BATCH_SIZE",

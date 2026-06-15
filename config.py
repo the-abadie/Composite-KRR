@@ -57,6 +57,7 @@ KRR_DISTANCE_CACHE_N_JOBS = -1
 KRR_DISTANCE_CACHE_MEMORY_FRACTION = 0.80
 KRR_CACHED_SCORING_BACKEND = "numpy"  # "numpy" or "pytorch"
 KRR_PYTORCH_DEVICE = "auto"  # "auto", "cpu", "cuda", "cuda:0", etc.
+KRR_PYTORCH_DEVICES = None  # None uses KRR_PYTORCH_DEVICE; "auto" uses one GPU per CV fold when available.
 KRR_PYTORCH_CANDIDATE_BATCH_SIZE = 1
 
 KRR_SCORE_METRIC = "neg_mean_absolute_error"

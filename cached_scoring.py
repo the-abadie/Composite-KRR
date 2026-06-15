@@ -97,6 +97,7 @@ def score_estimator_params_from_cache_pytorch(
     *,
     scoring,
     device: str | None = "auto",
+    devices=None,
     dtype=None,
     candidate_batch_size: int = 1,
 ) -> NDArray:
@@ -112,6 +113,7 @@ def score_estimator_params_from_cache_pytorch(
         cache=cache,
         scoring=scoring,
         device=device,
+        devices=devices,
         dtype=dtype,
         candidate_batch_size=candidate_batch_size,
     )[0]
@@ -127,6 +129,7 @@ def score_estimator_params_from_cache(
     n_jobs: int | None = None,
     blas_threads: int | None = None,
     pytorch_device: str | None = "auto",
+    pytorch_devices=None,
     pytorch_dtype=None,
     pytorch_candidate_batch_size: int = 1,
 ) -> NDArray:
@@ -147,6 +150,7 @@ def score_estimator_params_from_cache(
         cache,
         scoring=scoring,
         device=pytorch_device,
+        devices=pytorch_devices,
         dtype=pytorch_dtype,
         candidate_batch_size=pytorch_candidate_batch_size,
     )
@@ -222,6 +226,7 @@ def score_candidates_from_cache_pytorch(
     cache: DistanceCache,
     scoring,
     device: str | None = "auto",
+    devices=None,
     dtype=None,
     candidate_batch_size: int = 1,
 ) -> NDArray:
@@ -234,6 +239,7 @@ def score_candidates_from_cache_pytorch(
         cache=cache,
         scoring=scoring,
         device=device,
+        devices=devices,
         dtype=dtype,
         candidate_batch_size=candidate_batch_size,
     )
@@ -250,6 +256,7 @@ def score_candidates_from_cache(
     n_jobs: int | None = None,
     blas_threads: int | None = None,
     pytorch_device: str | None = "auto",
+    pytorch_devices=None,
     pytorch_dtype=None,
     pytorch_candidate_batch_size: int = 1,
 ) -> NDArray:
@@ -272,6 +279,7 @@ def score_candidates_from_cache(
         cache=cache,
         scoring=scoring,
         device=pytorch_device,
+        devices=pytorch_devices,
         dtype=pytorch_dtype,
         candidate_batch_size=pytorch_candidate_batch_size,
     )

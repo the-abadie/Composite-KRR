@@ -122,6 +122,34 @@ def array_nbytes(array) -> int:
     return int(np.asarray(array).nbytes)
 
 
+def resolve_cache_pytorch_devices(
+    *,
+    distance_backend: str,
+    pytorch_device: str | None,
+    pytorch_devices,
+    n_folds: int,
+):
+    if distance_backend != "pytorch":
+        return None
+
+    from pytorch_backend import require_torch, resolve_torch_devices
+
+    torch = require_torch()
+    return resolve_torch_devices(
+        torch,
+        pytorch_devices,
+        fallback_device=pytorch_device,
+        max_devices=n_folds,
+    )
+
+
+def pytorch_device_for_fold(resolved_devices, fold_index: int, fallback_device):
+    if not resolved_devices:
+        return fallback_device
+
+    return resolved_devices[fold_index % len(resolved_devices)]
+
+
 class _PredictionOnlyRegressor(RegressorMixin, BaseEstimator):
     def __init__(self, y_pred: NDArray):
         self.y_pred = np.asarray(y_pred)
@@ -148,6 +176,7 @@ def build_distance_cache(
     memory_fraction: float = 0.80,
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
+    pytorch_devices=None,
 ) -> DistanceCache:
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
@@ -224,6 +253,12 @@ def build_distance_cache(
     cache_n_jobs = resolve_cache_n_jobs(n_jobs, n_tasks=n_cache_tasks)
     if distance_backend == "pytorch":
         cache_n_jobs = 1
+    resolved_pytorch_devices = resolve_cache_pytorch_devices(
+        distance_backend=distance_backend,
+        pytorch_device=pytorch_device,
+        pytorch_devices=pytorch_devices,
+        n_folds=len(fold_metadata),
+    )
     logger.debug(
         "Estimated distance cache memory: %.2f MiB.",
         estimated_nbytes / (1024**2),
@@ -260,7 +295,11 @@ def build_distance_cache(
                 dtype=dtype,
                 use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                 distance_backend=distance_backend,
-                pytorch_device=pytorch_device,
+                pytorch_device=pytorch_device_for_fold(
+                    resolved_pytorch_devices,
+                    fold_index,
+                    pytorch_device,
+                ),
             )
             for fold_index, metadata in enumerate(fold_metadata)
             for component_index, (
@@ -290,7 +329,11 @@ def build_distance_cache(
                     dtype=dtype,
                     use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                     distance_backend=distance_backend,
-                    pytorch_device=pytorch_device,
+                    pytorch_device=pytorch_device_for_fold(
+                        resolved_pytorch_devices,
+                        fold_index,
+                        pytorch_device,
+                    ),
                 )
                 for fold_index, metadata in enumerate(fold_metadata)
                 for component_index, (
