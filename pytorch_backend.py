@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib import import_module
+import threading
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,9 @@ from kernel_cache import (
     inverse_transform_target,
     score_predictions,
 )
+
+_torch_cuda_warmup_lock = threading.Lock()
+_torch_cuda_warmed_devices: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -491,6 +495,7 @@ def score_candidates_from_cache_pytorch(
     n_candidates = alphas.shape[0]
     split_scores = np.empty((n_candidates, len(torch_cache.folds)), dtype=float)
     if _torch_cache_has_multiple_devices(torch_cache):
+        _warm_up_torch_cache_devices(torch_cache)
         with ThreadPoolExecutor(
             max_workers=_torch_cache_device_count(torch_cache)
         ) as executor:
@@ -542,6 +547,37 @@ def _torch_cache_devices(cache: TorchDistanceCache) -> set[str]:
         str(fold.y_train_transformed.device)
         for fold in cache.folds
     }
+
+
+def _warm_up_torch_cache_devices(cache: TorchDistanceCache) -> None:
+    torch = require_torch()
+    devices = {
+        fold.y_train_transformed.device
+        for fold in cache.folds
+        if getattr(fold.y_train_transformed.device, "type", None) == "cuda"
+    }
+    if not devices:
+        return
+
+    with _torch_cuda_warmup_lock:
+        for device in devices:
+            key = str(device)
+            if key in _torch_cuda_warmed_devices:
+                continue
+
+            torch.cuda.set_device(device)
+            with torch.no_grad():
+                eye = torch.eye(1, dtype=cache.dtype, device=device).reshape(1, 1, 1)
+                rhs = torch.ones((1, 1, 1), dtype=cache.dtype, device=device)
+                factor, _ = torch.linalg.cholesky_ex(
+                    eye,
+                    upper=False,
+                    check_errors=True,
+                )
+                _ = torch.cholesky_solve(rhs, factor, upper=False)
+                _ = torch.bmm(eye, rhs)
+            torch.cuda.synchronize(device)
+            _torch_cuda_warmed_devices.add(key)
 
 
 def _score_all_candidates_for_fold(
