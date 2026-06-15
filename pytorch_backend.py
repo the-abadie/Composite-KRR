@@ -534,12 +534,14 @@ def _torch_cache_has_multiple_devices(cache: TorchDistanceCache) -> bool:
 
 
 def _torch_cache_device_count(cache: TorchDistanceCache) -> int:
-    return len(
-        {
-            str(fold.y_train_transformed.device)
-            for fold in cache.folds
-        }
-    ) > 1
+    return len(_torch_cache_devices(cache))
+
+
+def _torch_cache_devices(cache: TorchDistanceCache) -> set[str]:
+    return {
+        str(fold.y_train_transformed.device)
+        for fold in cache.folds
+    }
 
 
 def _score_all_candidates_for_fold(
