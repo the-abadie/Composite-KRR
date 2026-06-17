@@ -36,6 +36,7 @@ from postprocess import (
 )
 from preprocess import make_data_preprocessor
 from search_bayes import BayesianSearchResult, fit_bayesian_search
+from target_utils import as_target_array, as_target_matrix
 
 configure_logging(VERBOSITY)
 logger = logging.getLogger("search")
@@ -330,12 +331,14 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
     def fit(self, X, y):
         compute_dtype = np.dtype(self.compute_dtype)
         X_blocks = self._unpack_sample_matrix(X)
-        y = np.asarray(y, dtype=compute_dtype).reshape(-1)
+        y_array = as_target_array(y, dtype=compute_dtype)
+        y_matrix = as_target_matrix(y_array, dtype=compute_dtype)
 
         n_blocks = len(X_blocks)
-        if y.shape[0] != X_blocks[0].shape[0]:
+        if y_matrix.shape[0] != X_blocks[0].shape[0]:
             raise ValueError(
-                f"X has {X_blocks[0].shape[0]} samples, but y has {y.shape[0]}."
+                f"X has {X_blocks[0].shape[0]} samples, but y has "
+                f"{y_matrix.shape[0]}."
             )
 
         names = self._resolve_sequence("names", self.names, n_blocks, "desc")
@@ -403,7 +406,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
             alpha=self.alpha,
             dtype=compute_dtype,
         )
-        self.model_.fit(X_blocks_t, y)
+        self.model_.fit(X_blocks_t, y_array)
         self.n_features_in_ = n_blocks
         self.names_ = names
         self.kernel_types_ = kernel_types

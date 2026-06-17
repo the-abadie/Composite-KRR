@@ -7,6 +7,7 @@ from scipy.linalg import solve
 from sklearn.metrics.pairwise import pairwise_kernels
 
 from config import VERBOSITY
+from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
 from utilities import configure_logging
 
 configure_logging(VERBOSITY)
@@ -50,8 +51,9 @@ class CompositeKRR:
         self.dtype = np.dtype(dtype)
 
     def fit(self, X_blocks: list[NDArray], y: ArrayLike):
-        y = np.asarray(y, dtype=self.dtype).reshape(-1)
-        n_samples = y.shape[0]
+        y_array = as_target_array(y, dtype=self.dtype)
+        y_matrix = as_target_matrix(y_array, dtype=self.dtype)
+        n_samples = y_matrix.shape[0]
         if n_samples == 0:
             raise ValueError("Cannot fit CompositeKRR with zero samples.")
 
@@ -61,8 +63,9 @@ class CompositeKRR:
         K[np.diag_indices_from(K)] += self.alpha
 
         self.X_train_blocks_ = X_train_blocks
-        self.y_train_ = y
-        self.dual_coef_ = solve(K, y, assume_a="pos")
+        self.y_train_ = y_matrix
+        self.target_was_1d_ = y_array.ndim == 1
+        self.dual_coef_ = solve(K, y_matrix, assume_a="pos")
 
         return self
 
@@ -72,7 +75,8 @@ class CompositeKRR:
 
         X_eval_blocks = self._prepare_blocks(X_blocks)
         K_eval = self._composite_kernel(X_eval_blocks, self.X_train_blocks_)
-        return K_eval @ self.dual_coef_
+        y_pred = K_eval @ self.dual_coef_
+        return maybe_squeeze_single_target(y_pred, squeeze=self.target_was_1d_)
 
     def _prepare_blocks(
         self, X_blocks: list[NDArray], n_samples: int | None = None

@@ -1,10 +1,12 @@
 from pathlib import Path
 import csv
 import matplotlib
+matplotlib.use("Agg")
 
 import numpy as np
 from numpy.typing import NDArray
 from sklearn.model_selection import RandomizedSearchCV
+from target_utils import align_targets_for_scoring, as_target_matrix
 from utilities import configure_logging
 from config import VERBOSITY
 import logging
@@ -447,6 +449,27 @@ def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:
         logger.warning(f"{percents[i]:05.2f}%: {start_end_list[i][2]}")
 
 
+def regression_error_summary(y_true: NDArray, y_pred: NDArray) -> dict:
+    y_true_matrix = as_target_matrix(y_true, dtype=float)
+    y_pred_matrix = as_target_matrix(y_pred, dtype=float)
+    if y_true_matrix.shape != y_pred_matrix.shape:
+        raise ValueError(
+            "y_true and y_pred must have matching target shapes, got "
+            f"{y_true_matrix.shape} and {y_pred_matrix.shape}."
+        )
+
+    error = y_pred_matrix - y_true_matrix
+    abs_error = np.abs(error)
+    squared_error = error * error
+    return {
+        "mae": float(np.mean(abs_error)),
+        "mae_std": float(np.std(abs_error)),
+        "rmse": float(np.sqrt(np.mean(squared_error))),
+        "target_mae": np.mean(abs_error, axis=0),
+        "target_rmse": np.sqrt(np.mean(squared_error, axis=0)),
+    }
+
+
 def plot_random_search_validation_error(
     search_result,
     OUTPUT_DIR:str,
@@ -527,29 +550,27 @@ def plot_random_search_validation_error(
 
 
 def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str) -> None:
-    if len(y_pred) != len(y_true):
-        raise ValueError(f"Length of y_pred ({len(y_pred)}) does not match length of y_true ({len(y_true)}).")
+    y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
+    y_true_flat = np.asarray(y_true_aligned, dtype=float).reshape(-1)
+    y_pred_flat = np.asarray(y_pred_aligned, dtype=float).reshape(-1)
 
-    plot_min = min(np.min(y_true), np.min(y_pred))
-    plot_max = max(np.max(y_true), np.max(y_pred))
-    plt.scatter(y_true, y_pred, s=2, color="goldenrod", label="Predictions")
-    plt.plot([plot_min, plot_max], [plot_min, plot_max], color="black", linestyle=":", label="y = x")
-    plt.legend()
-    plt.xlabel("True Target Value")
-    plt.ylabel("CKRR Prediction")
-    plt.title("Target Values Versus CKRR Predictions")
-    plt.savefig(f"{OUTPUT_DIR}/plot-yy.png", dpi=300, bbox_inches="tight")
+    plot_min = min(np.min(y_true_flat), np.min(y_pred_flat))
+    plot_max = max(np.max(y_true_flat), np.max(y_pred_flat))
+    fig, ax = plt.subplots()
+    ax.scatter(y_true_flat, y_pred_flat, s=2, color="goldenrod", label="Predictions")
+    ax.plot([plot_min, plot_max], [plot_min, plot_max], color="black", linestyle=":", label="y = x")
+    ax.legend()
+    ax.set_xlabel("True Target Value")
+    ax.set_ylabel("CKRR Prediction")
+    ax.set_title("Target Values Versus CKRR Predictions")
+    fig.savefig(f"{OUTPUT_DIR}/plot-yy.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str):
-    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
-    y_true = np.asarray(y_true, dtype=float).reshape(-1)
-
-    if len(y_pred) != len(y_true):
-        raise ValueError(
-            f"Length of y_pred ({len(y_pred)}) does not match length of "
-            f"y_true ({len(y_true)})."
-        )
+    y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
+    y_pred = np.asarray(y_pred_aligned, dtype=float).reshape(-1)
+    y_true = np.asarray(y_true_aligned, dtype=float).reshape(-1)
     if len(y_pred) == 0:
         raise ValueError("Cannot generate an error histogram with zero samples.")
     if bins <= 0:

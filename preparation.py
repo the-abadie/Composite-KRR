@@ -5,6 +5,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 import config
+from target_utils import as_target_matrix
 from utilities import configure_logging
 
 configure_logging(config.VERBOSITY)
@@ -26,7 +27,7 @@ def randomized_selection_with_remainder(arr, N, rng) -> tuple[NDArray, NDArray]:
 
 
 def stratified_selection(target, n_strata: int, n_total: int, rng) -> NDArray:
-    target = np.asarray(target)
+    target = stratification_values(target)
     n = target.shape[0]
 
     if rng is None:
@@ -52,6 +53,19 @@ def stratified_selection(target, n_strata: int, n_total: int, rng) -> NDArray:
     if idx.size != n_total:
         idx = idx[:n_total]
     return idx
+
+
+def stratification_values(target) -> NDArray:
+    target_matrix = as_target_matrix(target, dtype=float)
+    if target_matrix.shape[1] == 1:
+        return target_matrix[:, 0]
+
+    centered = target_matrix - np.mean(target_matrix, axis=0, keepdims=True)
+    scale = np.std(centered, axis=0, keepdims=True)
+    scale[scale == 0.0] = 1.0
+    standardized = centered / scale
+    _, _, vh = np.linalg.svd(standardized, full_matrices=False)
+    return standardized @ vh[0]
 
 
 def stratified_selection_with_remainder(

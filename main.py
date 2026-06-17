@@ -228,13 +228,7 @@ logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 if len(idx_test) > 0:
     y_pred = search_result.best_estimator_.predict(X_test)
 
-    err = y_test - y_pred
-
-    test_ae = np.abs(err)
-    test_mae = np.mean(test_ae)
-    test_mae_stdev = np.std(test_ae)
-
-    test_rmse = np.sqrt(np.mean(err ** 2))
+    test_summary = postprocess.regression_error_summary(y_true=y_test, y_pred=y_pred)
 
     fold_mae, fold_std = postprocess.best_validation_mae_and_fold_std(
         search_result=search_result,
@@ -242,8 +236,17 @@ if len(idx_test) > 0:
         ddof=1)
 
     logger.warning(f"Best Validation MAE across folds: {fold_mae:.6f} ± {fold_std:.6f}")
-    logger.warning(f"Held-out test MAE : {test_mae:.6g}")
-    logger.warning(f"Held-out test RMSE: {test_rmse:.6g}")
+    logger.warning(f"Held-out test MAE : {test_summary['mae']:.6g}")
+    logger.warning(f"Held-out test RMSE: {test_summary['rmse']:.6g}")
+    if len(test_summary["target_mae"]) > 1:
+        for target_index, (target_mae, target_rmse) in enumerate(
+            zip(test_summary["target_mae"], test_summary["target_rmse"]),
+            start=1,
+        ):
+            logger.warning(
+                f"Held-out target {target_index} MAE/RMSE: "
+                f"{target_mae:.6g} / {target_rmse:.6g}"
+            )
 
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
     postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=250, OUTPUT_DIR=config.OUTPUT_DIR)

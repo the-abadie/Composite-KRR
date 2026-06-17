@@ -16,6 +16,7 @@ from kernel_cache import (
     inverse_transform_target,
     score_predictions,
 )
+from target_utils import as_target_matrix
 
 _torch_cuda_warmup_lock = threading.Lock()
 _torch_cuda_warmed_devices: set[str] = set()
@@ -191,6 +192,7 @@ def _fold_distance_cache_to_pytorch(
     dtype,
     torch,
 ) -> TorchFoldDistanceCache:
+    y_validation = as_target_matrix(fold.y_validation, dtype=float)
     return TorchFoldDistanceCache(
         fold_id=fold.fold_id,
         train_distances=[
@@ -217,13 +219,13 @@ def _fold_distance_cache_to_pytorch(
             device=device,
             dtype=dtype,
         ),
-        y_validation=np.asarray(fold.y_validation, dtype=float).reshape(-1),
+        y_validation=y_validation,
         y_validation_torch=as_torch_tensor(
-            fold.y_validation,
+            y_validation,
             torch=torch,
             device=device,
             dtype=dtype,
-        ).reshape(-1),
+        ),
         target_transformer=fold.target_transformer,
     )
 
@@ -724,8 +726,11 @@ def _predict_batch_from_torch_fold(
     diag = torch.arange(K_train.shape[1], device=K_train.device)
     K_train[:, diag, diag] = K_train[:, diag, diag] + alphas_t[:, None]
 
-    rhs = fold.y_train_transformed.reshape(1, -1, 1).expand(K_train.shape[0], -1, -1)
-    dual_coef = _cholesky_solve_spd_batch(K_train, rhs).squeeze(-1)
+    y_train = fold.y_train_transformed
+    if y_train.ndim == 1:
+        y_train = y_train.reshape(-1, 1)
+    rhs = y_train.unsqueeze(0).expand(K_train.shape[0], -1, -1)
+    dual_coef = _cholesky_solve_spd_batch(K_train, rhs)
 
     K_validation = composite_kernel_from_distances_pytorch(
         fold.validation_train_distances,
@@ -733,7 +738,7 @@ def _predict_batch_from_torch_fold(
         weights=weights_t,
         kernel_types=kernel_types,
     )
-    return torch.bmm(K_validation, dual_coef.unsqueeze(-1)).squeeze(-1)
+    return torch.bmm(K_validation, dual_coef)
 
 
 def _cholesky_solve_spd_batch(K_train, rhs):
@@ -757,15 +762,19 @@ def _score_prediction_batch_pytorch(
     if y_pred is None:
         return None
 
-    y_true = fold.y_validation_torch.reshape(1, -1)
+    y_true = fold.y_validation_torch
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+    y_true = y_true.unsqueeze(0)
     diff = y_pred - y_true
 
     if scoring == "neg_mean_absolute_error":
-        return -torch.mean(torch.abs(diff), dim=1)
+        return -torch.mean(torch.abs(diff), dim=(1, 2))
     if scoring == "neg_mean_squared_error":
-        return -torch.mean(diff * diff, dim=1)
+        return -torch.mean(diff * diff, dim=(1, 2))
     if scoring == "neg_root_mean_squared_error":
-        return -torch.sqrt(torch.mean(diff * diff, dim=1))
+        per_target_mse = torch.mean(diff * diff, dim=1)
+        return -torch.mean(torch.sqrt(per_target_mse), dim=1)
     if scoring == "r2":
         ss_res = torch.sum(diff * diff, dim=1)
         y_centered = y_true - torch.mean(y_true, dim=1, keepdim=True)
@@ -778,7 +787,10 @@ def _score_prediction_batch_pytorch(
             perfect_scores,
             imperfect_scores,
         )
-        return torch.where(ss_tot == 0.0, finite_constant_scores, raw_scores)
+        return torch.mean(
+            torch.where(ss_tot == 0.0, finite_constant_scores, raw_scores),
+            dim=1,
+        )
 
     return None
 
@@ -821,11 +833,23 @@ def _inverse_standard_scaler_pytorch(transformer, values):
 
     scale = np.asarray(scale, dtype=float).reshape(-1)
     mean = np.asarray(mean, dtype=float).reshape(-1)
-    if scale.size != 1 or mean.size != 1:
+    n_targets = 1 if values.ndim == 1 else int(values.shape[-1])
+    if scale.size not in {1, n_targets} or mean.size not in {1, n_targets}:
         return None
 
-    scale_t = torch.as_tensor(scale[0], dtype=values.dtype, device=values.device)
-    mean_t = torch.as_tensor(mean[0], dtype=values.dtype, device=values.device)
+    broadcast_shape = [1] * values.ndim
+    broadcast_shape[-1] = scale.size
+    scale_t = torch.as_tensor(
+        scale,
+        dtype=values.dtype,
+        device=values.device,
+    ).reshape(broadcast_shape)
+    broadcast_shape[-1] = mean.size
+    mean_t = torch.as_tensor(
+        mean,
+        dtype=values.dtype,
+        device=values.device,
+    ).reshape(broadcast_shape)
     return values * scale_t + mean_t
 
 

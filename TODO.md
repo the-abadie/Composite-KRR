@@ -1,3 +1,3 @@
 - [ ] Finish post-processing stuff (plots, save logs to file, config to save model.joblib/HPs)
-- [ ] Multi-target learning
+- [x] Shared-kernel multi-target learning
 - [ ] (Optional) Get language server to stop yelling at everything

@@ -22,6 +22,11 @@ from kernels import (
     pairwise_self_lp_distance_pytorch,
 )
 from preprocess import make_data_preprocessor
+from target_utils import (
+    align_targets_for_scoring,
+    as_target_array,
+    as_target_matrix,
+)
 from utilities import configure_logging
 
 configure_logging(VERBOSITY)
@@ -181,7 +186,7 @@ def build_distance_cache(
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
-    y = np.asarray(y, dtype=dtype).reshape(-1)
+    y = as_target_array(y, dtype=dtype)
     if not 0 < memory_fraction <= 1:
         raise ValueError("memory_fraction must be in (0, 1].")
     if n_jobs == 0:
@@ -980,27 +985,28 @@ def score_predictions(y_true, y_pred, scoring) -> float:
     else:
         scorer = scoring
 
-    estimator = _PredictionOnlyRegressor(np.asarray(y_pred, dtype=float).reshape(-1))
-    X_dummy = np.zeros((len(estimator.y_pred), 1), dtype=float)
-    return float(scorer(estimator, X_dummy, np.asarray(y_true, dtype=float).reshape(-1)))
+    y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
+    estimator = _PredictionOnlyRegressor(y_pred_aligned)
+    X_dummy = np.zeros((len(y_true_aligned), 1), dtype=float)
+    return float(scorer(estimator, X_dummy, y_true_aligned))
 
 
 def fit_target_transformer(transformer, y):
-    y = np.asarray(y, dtype=float).reshape(-1, 1)
+    y = as_target_matrix(y, dtype=float)
     if transformer is None:
-        return None, y.reshape(-1)
+        return None, y
 
     fitted = clone(transformer)
     y_transformed = fitted.fit_transform(y)
-    return fitted, np.asarray(y_transformed, dtype=float).reshape(-1)
+    return fitted, as_target_matrix(y_transformed, dtype=float)
 
 
 def inverse_transform_target(transformer, y):
-    y = np.asarray(y, dtype=float).reshape(-1, 1)
+    y = as_target_matrix(y, dtype=float)
     if transformer is None:
-        return y.reshape(-1)
+        return y
 
-    return np.asarray(transformer.inverse_transform(y), dtype=float).reshape(-1)
+    return as_target_matrix(transformer.inverse_transform(y), dtype=float)
 
 
 def unpack_sample_matrix(X, dtype: np.dtype | type | str = np.float64) -> list[NDArray]:
