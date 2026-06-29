@@ -4,9 +4,9 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, RegressorMixin
 
-from cached_scoring import normalize_cached_scoring_backend
 from kernel_cache import (
     distance_spec_for_kernel,
+    normalize_distance_backend,
     resolve_sequence,
     unpack_sample_matrix,
 )
@@ -76,7 +76,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
         if self.eigenvalue_floor < 0:
             raise ValueError("eigenvalue_floor must be non-negative.")
 
-        backend = normalize_cached_scoring_backend(self.backend)
+        backend = normalize_distance_backend(self.backend)
         X_blocks = unpack_sample_matrix(X, dtype=compute_dtype)
         y_array = as_target_array(y, dtype=compute_dtype)
         y_matrix = as_target_matrix(y_array, dtype=compute_dtype)

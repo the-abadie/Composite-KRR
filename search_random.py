@@ -27,6 +27,12 @@ from kernel_cache import (
     resolve_sequence,
     unpack_sample_matrix,
 )
+from nystrom_cache import (
+    build_nystrom_distance_cache,
+    is_nystrom_distance_cache,
+    is_nystrom_regressor,
+    nystrom_cache_to_pytorch,
+)
 from kernels import pairwise_self_lp_distance
 from postprocess import (
     attach_random_search_history,
@@ -155,7 +161,7 @@ class CachedRandomSearchCV:
             blas_threads=self.blas_threads,
             pytorch_device=self.pytorch_device,
             pytorch_devices=self.pytorch_devices,
-            pytorch_dtype=self.distance_cache.folds[0].train_distances[0].dtype,
+            pytorch_dtype=_cache_distance_dtype(self.distance_cache),
             pytorch_candidate_batch_size=self.pytorch_candidate_batch_size,
         )
 
@@ -960,37 +966,64 @@ def staged_random_search_cv(
 
     distance_cache = None
     scoring_distance_cache = None
+    regressor = extract_regressor(estimator)
+    using_nystrom = is_nystrom_regressor(regressor)
     if use_distance_cache:
         time_cache_start: float = perf_counter()
-        distance_cache = _maybe_build_distance_cache(
-            estimator,
-            X,
-            y,
-            cv,
-            n_components=n_components,
-            block_size=distance_block_size,
-            dtype=distance_dtype,
-            n_jobs=distance_cache_n_jobs,
-            memory_fraction=distance_cache_memory_fraction,
-            cached_scoring_backend=cached_scoring_backend,
-            pytorch_device=pytorch_device,
-            pytorch_devices=pytorch_devices,
-        )
-        scoring_distance_cache = _prepare_scoring_distance_cache(
-            distance_cache,
-            cached_scoring_backend=cached_scoring_backend,
-            pytorch_device=pytorch_device,
-            pytorch_devices=pytorch_devices,
-            dtype=distance_dtype,
-        )
+        if using_nystrom:
+            distance_cache = _maybe_build_nystrom_distance_cache(
+                estimator,
+                X,
+                y,
+                cv,
+                n_components=n_components,
+                block_size=distance_block_size,
+                dtype=distance_dtype,
+                n_jobs=distance_cache_n_jobs,
+                memory_fraction=distance_cache_memory_fraction,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+            )
+            scoring_distance_cache = distance_cache
+        else:
+            distance_cache = _maybe_build_distance_cache(
+                estimator,
+                X,
+                y,
+                cv,
+                n_components=n_components,
+                block_size=distance_block_size,
+                dtype=distance_dtype,
+                n_jobs=distance_cache_n_jobs,
+                memory_fraction=distance_cache_memory_fraction,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+            )
+            scoring_distance_cache = _prepare_scoring_distance_cache(
+                distance_cache,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+                dtype=distance_dtype,
+            )
         time_cache_end: float = perf_counter()
         cache_timing_label = (
-            "Distance Matrix Pre-Caching"
+            (
+                "Nyström Landmark Distance Pre-Caching"
+                if using_nystrom
+                else "Distance Matrix Pre-Caching"
+            )
             if distance_cache is not None
-            else "Distance Matrix Pre-Caching (Unavailable)"
+            else (
+                "Nyström Landmark Distance Pre-Caching (Unavailable)"
+                if using_nystrom
+                else "Distance Matrix Pre-Caching (Unavailable)"
+            )
         )
         time_log.info(
-            f"Distance cache preparation completed in "
+            f"Kernel cache preparation completed in "
             f"{time_dif(time_cache_start, time_cache_end)}."
         )
     else:
@@ -1426,6 +1459,73 @@ def _fit_cached_random_search(
     return search
 
 
+def _maybe_build_nystrom_distance_cache(
+    estimator,
+    X,
+    y,
+    cv,
+    *,
+    n_components: int,
+    block_size: int,
+    dtype: np.dtype | type | str,
+    n_jobs: int | None,
+    memory_fraction: float,
+    cached_scoring_backend: str = "numpy",
+    pytorch_device: str | None = "auto",
+    pytorch_devices=None,
+):
+    regressor = extract_regressor(estimator)
+    names = resolve_sequence("names", regressor.names, n_components, "desc")
+    kernel_types = resolve_sequence(
+        "kernel_types", regressor.kernel_types, n_components, "rbf"
+    )
+    normalizations = resolve_sequence(
+        "normalizations", regressor.normalizations, n_components, "none"
+    )
+    pca_components = resolve_sequence(
+        "pca_components",
+        getattr(regressor, "pca_components", None),
+        n_components,
+        None,
+    )
+    pca_whiten = resolve_sequence(
+        "pca_whiten",
+        getattr(regressor, "pca_whiten", False),
+        n_components,
+        False,
+    )
+    target_transformer = extract_target_transformer(estimator)
+    distance_backend = normalize_cached_scoring_backend(cached_scoring_backend)
+
+    try:
+        return build_nystrom_distance_cache(
+            X,
+            y,
+            cv,
+            names=names,
+            kernel_types=kernel_types,
+            normalizations=normalizations,
+            pca_components=pca_components,
+            pca_whiten=pca_whiten,
+            target_transformer=target_transformer,
+            n_landmarks=regressor.n_landmarks,
+            landmark_selection=regressor.landmark_selection,
+            batch_size=regressor.batch_size,
+            eigenvalue_floor=regressor.eigenvalue_floor,
+            random_state=regressor.random_state,
+            block_size=block_size,
+            dtype=np.dtype(dtype),
+            n_jobs=n_jobs,
+            memory_fraction=memory_fraction,
+            distance_backend=distance_backend,
+            pytorch_device=pytorch_device,
+            pytorch_devices=pytorch_devices,
+        )
+    except UnsupportedDistanceKernelError as exc:
+        logger.info(f"Nyström distance cache disabled: {exc}")
+        return None
+
+
 def _maybe_build_distance_cache(
     estimator,
     X,
@@ -1498,6 +1598,21 @@ def _prepare_scoring_distance_cache(
 ):
     if distance_cache is None:
         return None
+    if is_nystrom_distance_cache(distance_cache):
+        if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
+            return distance_cache
+        if distance_cache.backend == "pytorch":
+            return distance_cache
+        logger.info(
+            "Transferring Nyström distance cache to PyTorch device %s.",
+            pytorch_device,
+        )
+        return nystrom_cache_to_pytorch(
+            distance_cache,
+            device=pytorch_device,
+            devices=pytorch_devices,
+            dtype=dtype,
+        )
 
     if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
         return distance_cache
@@ -1517,6 +1632,14 @@ def _prepare_scoring_distance_cache(
         devices=pytorch_devices,
         dtype=dtype,
     )
+
+
+def _cache_distance_dtype(cache):
+    distance = cache.folds[0].train_distances[0]
+    dtype = getattr(distance, "dtype", None)
+    if dtype is not None:
+        return dtype
+    return np.asarray(distance).dtype
 
 
 def _clone_with_params(estimator, *, prefix: str, **params):

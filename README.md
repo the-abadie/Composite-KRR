@@ -47,6 +47,8 @@ KRR_CACHED_SCORING_BACKEND = "numpy"  # or "pytorch" when torch is installed
 ```
 
 The Nyström backend selects landmarks from each training fold, builds the small
-landmark kernel, and streams `N x m` kernel features in row batches. It avoids
-materializing the exact `N x N` training kernel and disables the exact distance
-cache automatically.
+landmark kernel, and streams `N x m` kernel features in row batches. During
+hyperparameter search it pre-caches fold-local train-to-landmark,
+validation-to-landmark, and landmark-to-landmark distances, so candidates reuse
+the same `O(Nm)` cache instead of refitting through sklearn. It avoids
+materializing the exact `N x N` training kernel.

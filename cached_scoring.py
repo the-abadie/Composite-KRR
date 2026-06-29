@@ -14,6 +14,12 @@ from kernel_cache import (
     resolve_kernel_hyperparameters,
     score_fold_from_distances,
 )
+from nystrom_cache import (
+    is_nystrom_distance_cache,
+    score_candidates_from_nystrom_cache,
+    score_candidates_from_nystrom_cache_numpy,
+    score_candidates_from_nystrom_cache_pytorch,
+)
 
 
 def resolve_candidate_hyperparameter_arrays(
@@ -166,6 +172,17 @@ def score_candidates_from_cache_numpy(
     n_jobs: int | None = None,
     blas_threads: int | None = None,
 ) -> NDArray:
+    if is_nystrom_distance_cache(cache):
+        return score_candidates_from_nystrom_cache_numpy(
+            alphas=alphas,
+            gammas=gammas,
+            weights=weights,
+            cache=cache,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+        )
+
     alphas, gammas, weights = _validate_candidate_arrays(
         alphas,
         gammas,
@@ -230,6 +247,19 @@ def score_candidates_from_cache_pytorch(
     dtype=None,
     candidate_batch_size: int = 1,
 ) -> NDArray:
+    if is_nystrom_distance_cache(cache):
+        return score_candidates_from_nystrom_cache_pytorch(
+            alphas=alphas,
+            gammas=gammas,
+            weights=weights,
+            cache=cache,
+            scoring=scoring,
+            device=device,
+            devices=devices,
+            dtype=dtype,
+            candidate_batch_size=candidate_batch_size,
+        )
+
     from pytorch_backend import score_candidates_from_cache_pytorch as _impl
 
     return _impl(
@@ -260,6 +290,22 @@ def score_candidates_from_cache(
     pytorch_dtype=None,
     pytorch_candidate_batch_size: int = 1,
 ) -> NDArray:
+    if is_nystrom_distance_cache(cache):
+        return score_candidates_from_nystrom_cache(
+            alphas=alphas,
+            gammas=gammas,
+            weights=weights,
+            cache=cache,
+            scoring=scoring,
+            backend=backend,
+            n_jobs=n_jobs,
+            blas_threads=blas_threads,
+            pytorch_device=pytorch_device,
+            pytorch_devices=pytorch_devices,
+            pytorch_dtype=pytorch_dtype,
+            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+        )
+
     backend = normalize_cached_scoring_backend(backend)
     if backend == "numpy":
         return score_candidates_from_cache_numpy(

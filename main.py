@@ -198,11 +198,11 @@ scoring = (
     if config.KRR_SCORE_METRIC == "rmse"
     else config.KRR_SCORE_METRIC
 )
-use_distance_cache = config.KRR_USE_DISTANCE_CACHE and krr_backend == "exact"
-if config.KRR_USE_DISTANCE_CACHE and krr_backend != "exact":
+use_distance_cache = config.KRR_USE_DISTANCE_CACHE
+if not config.KRR_USE_DISTANCE_CACHE and krr_backend == "nystrom":
     logger.warning(
-        "Ignoring KRR_USE_DISTANCE_CACHE because the Nyström backend uses "
-        "streamed landmark features instead of exact dense distance caches."
+        "Nyström backend is running without landmark distance caching; "
+        "hyperparameter search will refit every candidate/fold through sklearn."
     )
 
 search_result = staged_random_search_cv(

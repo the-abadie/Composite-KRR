@@ -11,6 +11,7 @@ from cached_scoring import (
     score_candidates_from_cache,
     score_estimator_params_from_cache,
 )
+from nystrom_cache import is_nystrom_distance_cache, nystrom_cache_to_pytorch
 from postprocess import bayesian_search_history
 from utilities import configure_logging
 from config import VERBOSITY
@@ -140,7 +141,7 @@ def fit_bayesian_search(
                 blas_threads=blas_threads,
                 pytorch_device=pytorch_device,
                 pytorch_devices=pytorch_devices,
-                pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
+                pytorch_dtype=_cache_distance_dtype(distance_cache),
                 pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             )
             if not np.all(np.isfinite(scores)):
@@ -244,6 +245,21 @@ def _prepare_bayesian_distance_cache(
 ):
     if distance_cache is None:
         return None
+    if is_nystrom_distance_cache(distance_cache):
+        if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
+            return distance_cache
+        if distance_cache.backend == "pytorch":
+            return distance_cache
+        logger.info(
+            "Transferring Bayesian Nyström distance cache to PyTorch device %s.",
+            pytorch_device,
+        )
+        return nystrom_cache_to_pytorch(
+            distance_cache,
+            device=pytorch_device,
+            devices=pytorch_devices,
+            dtype=_cache_distance_dtype(distance_cache),
+        )
 
     if normalize_cached_scoring_backend(cached_scoring_backend) == "numpy":
         return distance_cache
@@ -261,7 +277,7 @@ def _prepare_bayesian_distance_cache(
         distance_cache,
         device=pytorch_device,
         devices=pytorch_devices,
-        dtype=distance_cache.folds[0].train_distances[0].dtype,
+        dtype=_cache_distance_dtype(distance_cache),
     )
 
 
@@ -420,7 +436,7 @@ def _score_bayesian_param_batch(
         blas_threads=blas_threads,
         pytorch_device=pytorch_device,
         pytorch_devices=pytorch_devices,
-        pytorch_dtype=distance_cache.folds[0].train_distances[0].dtype,
+        pytorch_dtype=_cache_distance_dtype(distance_cache),
         pytorch_candidate_batch_size=pytorch_candidate_batch_size,
     )
 
@@ -478,6 +494,14 @@ def _batched_patience_stop_requested(
         f"(best trial {study.best_trial.number + 1})."
     )
     return True
+
+
+def _cache_distance_dtype(cache):
+    distance = cache.folds[0].train_distances[0]
+    dtype = getattr(distance, "dtype", None)
+    if dtype is not None:
+        return dtype
+    return np.asarray(distance).dtype
 
 
 def _suggest_bayesian_params(
