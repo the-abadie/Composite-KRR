@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 from joblib import Parallel, delayed
 import numpy as np
@@ -33,6 +34,10 @@ from kernels import (
 from nystrom_krr import select_landmark_indices
 from preprocess import make_data_preprocessor
 from target_utils import as_target_array, as_target_matrix
+
+
+_TORCH_LINALG_WARMUP_LOCK = Lock()
+_TORCH_LINALG_WARMED: set[tuple[str, str]] = set()
 
 
 @dataclass(frozen=True)
@@ -747,6 +752,8 @@ def score_candidates_from_nystrom_cache_pytorch(
     n_candidates = alphas.shape[0]
     split_scores = np.empty((n_candidates, len(torch_cache.folds)), dtype=float)
 
+    _warm_up_torch_linalg_for_cache(torch_cache)
+
     if _cache_has_multiple_torch_devices(torch_cache):
         with ThreadPoolExecutor(max_workers=_cache_torch_device_count(torch_cache)) as executor:
             futures = [
@@ -1046,6 +1053,7 @@ def _nystrom_normalizer_pytorch(
         kernel_types=kernel_types,
         row_slice=None,
     )
+    _warm_up_torch_linalg(W.device, W.dtype)
     W = 0.5 * (W + W.T)
     eigenvalues, eigenvectors = torch.linalg.eigh(W)
     positive = eigenvalues[eigenvalues > 0]
@@ -1087,6 +1095,38 @@ def _composite_kernel_from_distance_batch_pytorch(
     if K_total is None:
         raise ValueError("At least one distance matrix is required.")
     return K_total
+
+
+def _warm_up_torch_linalg_for_cache(cache: NystromDistanceCache) -> None:
+    for fold in cache.folds:
+        _warm_up_torch_linalg(
+            fold.y_train_transformed.device,
+            fold.y_train_transformed.dtype,
+        )
+
+
+def _warm_up_torch_linalg(device, dtype) -> None:
+    from pytorch_backend import require_torch
+
+    torch = require_torch()
+    torch_device = torch.device(device)
+    key = (str(torch_device), str(dtype))
+    if key in _TORCH_LINALG_WARMED:
+        return
+
+    with _TORCH_LINALG_WARMUP_LOCK:
+        if key in _TORCH_LINALG_WARMED:
+            return
+        if torch_device.type == "cuda":
+            torch.cuda.set_device(torch_device)
+        with torch.no_grad():
+            eye = torch.eye(2, dtype=dtype, device=torch_device)
+            symmetric = eye.clone()
+            torch.linalg.eigh(symmetric)
+            torch.linalg.solve(symmetric + 0.125 * eye, eye)
+            if torch_device.type == "cuda":
+                torch.cuda.synchronize(torch_device)
+        _TORCH_LINALG_WARMED.add(key)
 
 
 def _cache_has_multiple_torch_devices(cache: NystromDistanceCache) -> bool:
