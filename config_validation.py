@@ -100,6 +100,12 @@ def validate_config() -> None:
     n_descriptors = len(config.X_PATHS)
     resolve_kernel_types(n_descriptors)
 
+    krr_backend = getattr(config, "KRR_BACKEND", "exact")
+    if not isinstance(krr_backend, str):
+        raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
+    if krr_backend.lower() not in {"exact", "dense", "nystrom", "nyström"}:
+        raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
+
     for component in resolve_pca_components(n_descriptors):
         _validate_pca_components(component)
 
@@ -183,6 +189,14 @@ def validate_config() -> None:
     if not np.issubdtype(np.dtype(config.KRR_COMPUTE_DTYPE), np.floating):
         raise ValueError("`KRR_COMPUTE_DTYPE` must be a floating NumPy dtype.")
 
+    try:
+        np.dtype(config.KRR_DISTANCE_CACHE_DTYPE)
+    except TypeError as exc:
+        raise ValueError("`KRR_DISTANCE_CACHE_DTYPE` must be a valid NumPy dtype.") from exc
+
+    if not np.issubdtype(np.dtype(config.KRR_DISTANCE_CACHE_DTYPE), np.floating):
+        raise ValueError("`KRR_DISTANCE_CACHE_DTYPE` must be a floating NumPy dtype.")
+
     if (
         config.KRR_DISTANCE_CACHE_N_JOBS is not None
         and (
@@ -211,6 +225,12 @@ def validate_config() -> None:
     if not 0 < config.KRR_DISTANCE_CACHE_MEMORY_FRACTION <= 1:
         raise ValueError("`KRR_DISTANCE_CACHE_MEMORY_FRACTION` must be in (0, 1].")
 
+    gamma_prior_max_samples = getattr(config, "KRR_GAMMA_PRIOR_MAX_SAMPLES", None)
+    if gamma_prior_max_samples is not None and (
+        type(gamma_prior_max_samples) is not int or gamma_prior_max_samples <= 0
+    ):
+        raise ValueError("`KRR_GAMMA_PRIOR_MAX_SAMPLES` must be `None` or a positive int.")
+
     if not (
         isinstance(config.KRR_TOP_K_FRACTION, float)
         or isinstance(config.KRR_TOP_K_FRACTION, int)
@@ -224,6 +244,36 @@ def validate_config() -> None:
         or config.KRR_TOP_K_MIN_CANDIDATES <= 0
     ):
         raise ValueError("`KRR_TOP_K_MIN_CANDIDATES` must be a positive int.")
+
+    nystrom_n_landmarks = getattr(config, "KRR_NYSTROM_N_LANDMARKS", 2048)
+    if type(nystrom_n_landmarks) is not int or nystrom_n_landmarks <= 0:
+        raise ValueError("`KRR_NYSTROM_N_LANDMARKS` must be a positive int.")
+
+    nystrom_landmark_selection = getattr(
+        config,
+        "KRR_NYSTROM_LANDMARK_SELECTION",
+        "random",
+    )
+    if not isinstance(nystrom_landmark_selection, str) or (
+        nystrom_landmark_selection.lower() not in {"random", "first"}
+    ):
+        raise ValueError(
+            '`KRR_NYSTROM_LANDMARK_SELECTION` must be "random" or "first".'
+        )
+
+    nystrom_batch_size = getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048)
+    if type(nystrom_batch_size) is not int or nystrom_batch_size <= 0:
+        raise ValueError("`KRR_NYSTROM_BATCH_SIZE` must be a positive int.")
+
+    nystrom_eigenvalue_floor = getattr(
+        config,
+        "KRR_NYSTROM_EIGENVALUE_FLOOR",
+        1e-12,
+    )
+    if not isinstance(nystrom_eigenvalue_floor, (float, int)) or (
+        nystrom_eigenvalue_floor < 0
+    ):
+        raise ValueError("`KRR_NYSTROM_EIGENVALUE_FLOOR` must be non-negative.")
 
     if not isinstance(config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS, bool):
         raise ValueError("`KRR_EVALUATE_KERNEL_CONTRIBUTIONS` must be a bool.")

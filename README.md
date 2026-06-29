@@ -30,3 +30,23 @@ Search scores use sklearn's default multi-output aggregation for the selected
 metric, and held-out reporting logs aggregate MAE/RMSE plus per-target MAE/RMSE.
 When `STRATIFY = True`, multi-output targets are reduced to the first principal
 direction of standardized target columns for split stratification.
+
+## Nyström backend
+
+Set `KRR_BACKEND = "nystrom"` in `config.py` to use an approximate streamed
+Nyström KRR backend instead of exact dense KRR. The exact backend remains the
+default.
+
+Important knobs:
+
+```python
+KRR_BACKEND = "nystrom"
+KRR_NYSTROM_N_LANDMARKS = 4096
+KRR_NYSTROM_BATCH_SIZE = 2048
+KRR_CACHED_SCORING_BACKEND = "numpy"  # or "pytorch" when torch is installed
+```
+
+The Nyström backend selects landmarks from each training fold, builds the small
+landmark kernel, and streams `N x m` kernel features in row batches. It avoids
+materializing the exact `N x N` training kernel and disables the exact distance
+cache automatically.

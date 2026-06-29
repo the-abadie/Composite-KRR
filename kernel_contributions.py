@@ -6,7 +6,8 @@ from sklearn.compose import TransformedTargetRegressor
 
 import postprocess
 import preprocess
-from search_random import CompositeKRREstimator, staged_random_search_cv
+from estimator_factory import make_composite_krr_regressor
+from search_random import staged_random_search_cv
 
 
 logger = logging.getLogger("kernel-contributions")
@@ -27,6 +28,8 @@ def evaluate_kernel_contributions(
     scoring,
     cv,
     search_kwargs: dict,
+    krr_backend: str = "exact",
+    nystrom_kwargs: dict | None = None,
     output_dir: str | None = None,
     ddof: int = 1,
 ) -> tuple[list[dict], list[tuple[float, float, str]]]:
@@ -46,6 +49,7 @@ def evaluate_kernel_contributions(
         False,
     )
     n_components = len(component_names)
+    nystrom_kwargs = {} if nystrom_kwargs is None else dict(nystrom_kwargs)
     timings = []
 
     if n_components == 0:
@@ -99,6 +103,8 @@ def evaluate_kernel_contributions(
             scoring=scoring,
             cv=cv,
             search_kwargs=search_kwargs,
+            krr_backend=krr_backend,
+            nystrom_kwargs=nystrom_kwargs,
         )
     time_single_end = perf_counter()
     timings.append(
@@ -131,6 +137,8 @@ def evaluate_kernel_contributions(
             scoring=scoring,
             cv=cv,
             search_kwargs=search_kwargs,
+            krr_backend=krr_backend,
+            nystrom_kwargs=nystrom_kwargs,
         )
     time_ablation_end = perf_counter()
     timings.append(
@@ -168,6 +176,8 @@ def _fit_component_subset(
     scoring,
     cv,
     search_kwargs: dict,
+    krr_backend: str,
+    nystrom_kwargs: dict,
 ):
     component_indices = list(component_indices)
     if not component_indices:
@@ -179,7 +189,8 @@ def _fit_component_subset(
     subset_pca_components = [pca_components[index] for index in component_indices]
     subset_pca_whiten = [pca_whiten[index] for index in component_indices]
     subset_estimator = TransformedTargetRegressor(
-        regressor=CompositeKRREstimator(
+        regressor=make_composite_krr_regressor(
+            krr_backend=krr_backend,
             names=subset_names,
             kernel_types=subset_kernel_types,
             normalizations=subset_norms,
@@ -187,6 +198,7 @@ def _fit_component_subset(
             pca_whiten=subset_pca_whiten,
             normalize_kernel_weights=True,
             compute_dtype=compute_dtype,
+            **nystrom_kwargs,
         ),
         transformer=preprocess.make_target_preprocessor(target_normalization),
     )

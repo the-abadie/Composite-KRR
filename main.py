@@ -13,7 +13,8 @@ import postprocess
 from class_CompositeDescriptor import CompositeDescriptor
 from class_Target import Target
 from kernel_contributions import evaluate_kernel_contributions
-from search_random import CompositeKRREstimator, staged_random_search_cv
+from estimator_factory import make_composite_krr_regressor, normalize_krr_backend
+from search_random import staged_random_search_cv
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
@@ -160,8 +161,10 @@ y_test = target_data[idx_test]
 kernel_types = resolve_kernel_types(DESCRIPTOR_ORDER)
 pca_components = resolve_pca_components(DESCRIPTOR_ORDER)
 pca_whiten = resolve_pca_whiten(DESCRIPTOR_ORDER)
+krr_backend = normalize_krr_backend(getattr(config, "KRR_BACKEND", "exact"))
 
-base_estimator = CompositeKRREstimator(
+base_estimator = make_composite_krr_regressor(
+    krr_backend=krr_backend,
     names=config.X_NAMES,
     kernel_types=kernel_types,
     normalizations=config.X_NORMS,
@@ -169,6 +172,21 @@ base_estimator = CompositeKRREstimator(
     pca_whiten=pca_whiten,
     normalize_kernel_weights=True,
     compute_dtype=config.KRR_COMPUTE_DTYPE,
+    nystrom_n_landmarks=getattr(config, "KRR_NYSTROM_N_LANDMARKS", 2048),
+    nystrom_landmark_selection=getattr(
+        config,
+        "KRR_NYSTROM_LANDMARK_SELECTION",
+        "random",
+    ),
+    random_state=config.SEED,
+    nystrom_backend=config.KRR_CACHED_SCORING_BACKEND,
+    pytorch_device=config.KRR_PYTORCH_DEVICE,
+    nystrom_batch_size=getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
+    nystrom_eigenvalue_floor=getattr(
+        config,
+        "KRR_NYSTROM_EIGENVALUE_FLOOR",
+        1e-12,
+    ),
 )
 estimator = TransformedTargetRegressor(
     regressor=base_estimator,
@@ -180,6 +198,13 @@ scoring = (
     if config.KRR_SCORE_METRIC == "rmse"
     else config.KRR_SCORE_METRIC
 )
+use_distance_cache = config.KRR_USE_DISTANCE_CACHE and krr_backend == "exact"
+if config.KRR_USE_DISTANCE_CACHE and krr_backend != "exact":
+    logger.warning(
+        "Ignoring KRR_USE_DISTANCE_CACHE because the Nyström backend uses "
+        "streamed landmark features instead of exact dense distance caches."
+    )
+
 search_result = staged_random_search_cv(
     estimator,
     X_train_val,
@@ -200,11 +225,12 @@ search_result = staged_random_search_cv(
     bayesian_timeout=config.KRR_BAYESIAN_SEARCH_TIMEOUT,
     bayesian_patience=config.KRR_BAYESIAN_SEARCH_PATIENCE,
     bayesian_batch_size=config.KRR_BAYESIAN_BATCH_SIZE,
-    use_distance_cache=config.KRR_USE_DISTANCE_CACHE,
+    use_distance_cache=use_distance_cache,
     distance_block_size=config.KRR_DISTANCE_BLOCK_SIZE,
-    distance_dtype=config.KRR_COMPUTE_DTYPE,
+    distance_dtype=config.KRR_DISTANCE_CACHE_DTYPE,
     distance_cache_n_jobs=config.KRR_DISTANCE_CACHE_N_JOBS,
     distance_cache_memory_fraction=config.KRR_DISTANCE_CACHE_MEMORY_FRACTION,
+    gamma_prior_max_samples=getattr(config, "KRR_GAMMA_PRIOR_MAX_SAMPLES", 5000),
     cached_scoring_backend=config.KRR_CACHED_SCORING_BACKEND,
     pytorch_device=config.KRR_PYTORCH_DEVICE,
     pytorch_devices=config.KRR_PYTORCH_DEVICES,
@@ -292,12 +318,17 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
             "bayesian_timeout": config.KRR_BAYESIAN_SEARCH_TIMEOUT,
             "bayesian_patience": config.KRR_BAYESIAN_SEARCH_PATIENCE,
             "bayesian_batch_size": config.KRR_BAYESIAN_BATCH_SIZE,
-            "use_distance_cache": config.KRR_USE_DISTANCE_CACHE,
+            "use_distance_cache": use_distance_cache,
             "distance_block_size": config.KRR_DISTANCE_BLOCK_SIZE,
-            "distance_dtype": config.KRR_COMPUTE_DTYPE,
+            "distance_dtype": config.KRR_DISTANCE_CACHE_DTYPE,
             "distance_cache_n_jobs": config.KRR_DISTANCE_CACHE_N_JOBS,
             "distance_cache_memory_fraction": (
                 config.KRR_DISTANCE_CACHE_MEMORY_FRACTION
+            ),
+            "gamma_prior_max_samples": getattr(
+                config,
+                "KRR_GAMMA_PRIOR_MAX_SAMPLES",
+                5000,
             ),
             "cached_scoring_backend": config.KRR_CACHED_SCORING_BACKEND,
             "pytorch_device": config.KRR_PYTORCH_DEVICE,
@@ -305,6 +336,24 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
             "pytorch_candidate_batch_size": config.KRR_PYTORCH_CANDIDATE_BATCH_SIZE,
             "top_k_fraction": config.KRR_TOP_K_FRACTION,
             "top_k_min_candidates": config.KRR_TOP_K_MIN_CANDIDATES,
+        },
+        krr_backend=krr_backend,
+        nystrom_kwargs={
+            "nystrom_n_landmarks": getattr(config, "KRR_NYSTROM_N_LANDMARKS", 2048),
+            "nystrom_landmark_selection": getattr(
+                config,
+                "KRR_NYSTROM_LANDMARK_SELECTION",
+                "random",
+            ),
+            "random_state": config.SEED,
+            "nystrom_backend": config.KRR_CACHED_SCORING_BACKEND,
+            "pytorch_device": config.KRR_PYTORCH_DEVICE,
+            "nystrom_batch_size": getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
+            "nystrom_eigenvalue_floor": getattr(
+                config,
+                "KRR_NYSTROM_EIGENVALUE_FLOOR",
+                1e-12,
+            ),
         },
         output_dir=config.OUTPUT_DIR,
         ddof=1,

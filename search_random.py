@@ -526,6 +526,8 @@ def estimate_gamma_bounds(
     distance_cache=None,
     dtype: np.dtype | type | str = np.float64,
     block_size: int = 1024,
+    max_samples: int | None = None,
+    random_state=None,
 ) -> list[tuple[float, float]]:
     component_legal_bounds = _as_component_bounds(
         legal_gamma_bounds,
@@ -533,6 +535,8 @@ def estimate_gamma_bounds(
     )
     if decades <= 0:
         raise ValueError(f"decades must be positive, got {decades}.")
+    if max_samples is not None and (type(max_samples) is not int or max_samples <= 0):
+        raise ValueError("max_samples must be None or a positive int.")
 
     centers = (
         _gamma_centers_from_distance_cache(distance_cache, component_legal_bounds)
@@ -544,6 +548,8 @@ def estimate_gamma_bounds(
             legal_gamma_bounds=component_legal_bounds,
             dtype=dtype,
             block_size=block_size,
+            max_samples=max_samples,
+            random_state=random_state,
         )
     )
 
@@ -587,6 +593,8 @@ def _gamma_centers_from_full_data(
     legal_gamma_bounds: list[tuple[float, float]],
     dtype: np.dtype | type | str,
     block_size: int,
+    max_samples: int | None,
+    random_state,
 ) -> list[float]:
     regressor = extract_regressor(estimator)
     kernel_types = resolve_sequence(
@@ -614,6 +622,18 @@ def _gamma_centers_from_full_data(
         False,
     )
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
+    original_n_samples = X_blocks[0].shape[0]
+    if max_samples is not None and original_n_samples > max_samples:
+        rng = np.random.default_rng(random_state)
+        sample_indices = np.sort(
+            rng.choice(original_n_samples, size=max_samples, replace=False)
+        )
+        X_blocks = [X_block[sample_indices] for X_block in X_blocks]
+        logger.info(
+            "Estimating gamma priors from %s sampled rows instead of all %s rows.",
+            max_samples,
+            original_n_samples,
+        )
     centers = []
 
     for (
@@ -905,6 +925,7 @@ def staged_random_search_cv(
     distance_dtype: np.dtype | type | str = np.float64,
     distance_cache_n_jobs: int | None = -1,
     distance_cache_memory_fraction: float = 0.80,
+    gamma_prior_max_samples: int | None = None,
     gamma_prior_decades: float = 2.5,
     refine_decades: float = 1.0,
     top_k_fraction: float = 0.20,
@@ -987,6 +1008,8 @@ def staged_random_search_cv(
         distance_cache=distance_cache,
         dtype=distance_dtype,
         block_size=distance_block_size,
+        max_samples=gamma_prior_max_samples,
+        random_state=random_state,
     )
 
     stage1_estimator = _clone_with_params(
