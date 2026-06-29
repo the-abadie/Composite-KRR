@@ -3,5 +3,4 @@ __pycache__
 .venv
 depr
 plot-*
-sample/QM7/*.npy
-sample/output/*
+sample
