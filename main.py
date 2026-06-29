@@ -181,12 +181,21 @@ base_estimator = make_composite_krr_regressor(
     random_state=config.SEED,
     nystrom_backend=config.KRR_CACHED_SCORING_BACKEND,
     pytorch_device=config.KRR_PYTORCH_DEVICE,
+    pytorch_devices=getattr(
+        config,
+        "KRR_CG_PYTORCH_DEVICES",
+        config.KRR_PYTORCH_DEVICES,
+    ),
     nystrom_batch_size=getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
     nystrom_eigenvalue_floor=getattr(
         config,
         "KRR_NYSTROM_EIGENVALUE_FLOOR",
         1e-12,
     ),
+    cg_tol=getattr(config, "KRR_CG_TOL", 1e-6),
+    cg_max_iter=getattr(config, "KRR_CG_MAX_ITER", 1000),
+    cg_block_size=getattr(config, "KRR_CG_BLOCK_SIZE", 2048),
+    cg_log_interval=getattr(config, "KRR_CG_LOG_INTERVAL", 25),
 )
 estimator = TransformedTargetRegressor(
     regressor=base_estimator,
@@ -348,12 +357,21 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
             "random_state": config.SEED,
             "nystrom_backend": config.KRR_CACHED_SCORING_BACKEND,
             "pytorch_device": config.KRR_PYTORCH_DEVICE,
+            "pytorch_devices": getattr(
+                config,
+                "KRR_CG_PYTORCH_DEVICES",
+                config.KRR_PYTORCH_DEVICES,
+            ),
             "nystrom_batch_size": getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
             "nystrom_eigenvalue_floor": getattr(
                 config,
                 "KRR_NYSTROM_EIGENVALUE_FLOOR",
                 1e-12,
             ),
+            "cg_tol": getattr(config, "KRR_CG_TOL", 1e-6),
+            "cg_max_iter": getattr(config, "KRR_CG_MAX_ITER", 1000),
+            "cg_block_size": getattr(config, "KRR_CG_BLOCK_SIZE", 2048),
+            "cg_log_interval": getattr(config, "KRR_CG_LOG_INTERVAL", 25),
         },
         output_dir=config.OUTPUT_DIR,
         ddof=1,

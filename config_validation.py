@@ -102,9 +102,18 @@ def validate_config() -> None:
 
     krr_backend = getattr(config, "KRR_BACKEND", "exact")
     if not isinstance(krr_backend, str):
-        raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
-    if krr_backend.lower() not in {"exact", "dense", "nystrom", "nyström"}:
-        raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
+        raise ValueError('`KRR_BACKEND` must be "exact", "nystrom", or "cg".')
+    if krr_backend.lower() not in {
+        "exact",
+        "dense",
+        "nystrom",
+        "nyström",
+        "cg",
+        "exact_cg",
+        "matrix_free_cg",
+        "torch_cg",
+    }:
+        raise ValueError('`KRR_BACKEND` must be "exact", "nystrom", or "cg".')
 
     for component in resolve_pca_components(n_descriptors):
         _validate_pca_components(component)
@@ -136,18 +145,7 @@ def validate_config() -> None:
         raise ValueError("`KRR_PYTORCH_DEVICE` must be `None` or a string.")
 
     pytorch_devices = getattr(config, "KRR_PYTORCH_DEVICES", None)
-    if pytorch_devices is not None and not isinstance(pytorch_devices, str):
-        try:
-            pytorch_devices = list(pytorch_devices)
-        except TypeError as exc:
-            raise ValueError(
-                "`KRR_PYTORCH_DEVICES` must be `None`, a string, or a "
-                "sequence of strings."
-            ) from exc
-        if not pytorch_devices:
-            raise ValueError("`KRR_PYTORCH_DEVICES` cannot be an empty sequence.")
-        if not all(isinstance(device, str) for device in pytorch_devices):
-            raise ValueError("`KRR_PYTORCH_DEVICES` must contain only strings.")
+    _validate_optional_device_sequence("KRR_PYTORCH_DEVICES", pytorch_devices)
 
     pytorch_candidate_batch_size = getattr(
         config,
@@ -275,6 +273,29 @@ def validate_config() -> None:
     ):
         raise ValueError("`KRR_NYSTROM_EIGENVALUE_FLOOR` must be non-negative.")
 
+    cg_tol = getattr(config, "KRR_CG_TOL", 1e-6)
+    if not isinstance(cg_tol, (float, int)) or cg_tol <= 0:
+        raise ValueError("`KRR_CG_TOL` must be positive.")
+
+    cg_max_iter = getattr(config, "KRR_CG_MAX_ITER", 1000)
+    if type(cg_max_iter) is not int or cg_max_iter <= 0:
+        raise ValueError("`KRR_CG_MAX_ITER` must be a positive int.")
+
+    cg_block_size = getattr(config, "KRR_CG_BLOCK_SIZE", 2048)
+    if type(cg_block_size) is not int or cg_block_size <= 0:
+        raise ValueError("`KRR_CG_BLOCK_SIZE` must be a positive int.")
+
+    cg_pytorch_devices = getattr(
+        config,
+        "KRR_CG_PYTORCH_DEVICES",
+        getattr(config, "KRR_PYTORCH_DEVICES", None),
+    )
+    _validate_optional_device_sequence("KRR_CG_PYTORCH_DEVICES", cg_pytorch_devices)
+
+    cg_log_interval = getattr(config, "KRR_CG_LOG_INTERVAL", 25)
+    if type(cg_log_interval) is not int or cg_log_interval < 0:
+        raise ValueError("`KRR_CG_LOG_INTERVAL` must be a non-negative int.")
+
     if not isinstance(config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS, bool):
         raise ValueError("`KRR_EVALUATE_KERNEL_CONTRIBUTIONS` must be a bool.")
 
@@ -322,3 +343,19 @@ def _validate_pca_components(value) -> None:
         "`X_PCA_COMPONENTS` values must be None, a positive int, "
         'a float in (0, 1), or "mle".'
     )
+
+
+def _validate_optional_device_sequence(name: str, devices) -> None:
+    if devices is None or isinstance(devices, str):
+        return
+
+    try:
+        devices = list(devices)
+    except TypeError as exc:
+        raise ValueError(
+            f"`{name}` must be `None`, a string, or a sequence of strings."
+        ) from exc
+    if not devices:
+        raise ValueError(f"`{name}` cannot be an empty sequence.")
+    if not all(isinstance(device, str) for device in devices):
+        raise ValueError(f"`{name}` must contain only strings.")

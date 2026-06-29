@@ -33,6 +33,7 @@ from nystrom_cache import (
     is_nystrom_regressor,
     nystrom_cache_to_pytorch,
 )
+from torch_cg_krr import is_torch_cg_regressor
 from kernels import pairwise_self_lp_distance
 from postprocess import (
     attach_random_search_history,
@@ -968,9 +969,19 @@ def staged_random_search_cv(
     scoring_distance_cache = None
     regressor = extract_regressor(estimator)
     using_nystrom = is_nystrom_regressor(regressor)
+    using_torch_cg = is_torch_cg_regressor(regressor)
+    if using_torch_cg and n_jobs not in (None, 1):
+        logger.warning(
+            "For the torch CG backend, forcing search n_jobs=1 so one "
+            "candidate/fold can use the configured GPU set without contention."
+        )
+        n_jobs = 1
     if use_distance_cache:
         time_cache_start: float = perf_counter()
-        if using_nystrom:
+        if using_torch_cg:
+            distance_cache = None
+            scoring_distance_cache = None
+        elif using_nystrom:
             distance_cache = _maybe_build_nystrom_distance_cache(
                 estimator,
                 X,
@@ -1011,11 +1022,15 @@ def staged_random_search_cv(
         time_cache_end: float = perf_counter()
         cache_timing_label = (
             (
-                "Nyström Landmark Distance Pre-Caching"
-                if using_nystrom
-                else "Distance Matrix Pre-Caching"
+                "Distance Matrix Pre-Caching (Skipped: Torch CG backend)"
+                if using_torch_cg
+                else (
+                    "Nyström Landmark Distance Pre-Caching"
+                    if using_nystrom
+                    else "Distance Matrix Pre-Caching"
+                )
             )
-            if distance_cache is not None
+            if distance_cache is not None or using_torch_cg
             else (
                 "Nyström Landmark Distance Pre-Caching (Unavailable)"
                 if using_nystrom

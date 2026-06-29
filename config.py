@@ -31,7 +31,7 @@ STRATIFY = True
 N_STRATA = 5
 
 KRR_KERNEL = "rbf"
-KRR_BACKEND = "exact"  # "exact" or "nystrom"
+KRR_BACKEND = "exact"  # "exact", "nystrom", or "cg"
 
 KRR_ALPHA_BOUNDS = (1e-9, 1e2)
 KRR_GAMMA_BOUNDS = (1e-9, 1e2)
@@ -66,6 +66,11 @@ KRR_NYSTROM_N_LANDMARKS = 2048
 KRR_NYSTROM_LANDMARK_SELECTION = "random"  # "random" or "first"
 KRR_NYSTROM_BATCH_SIZE = 2048
 KRR_NYSTROM_EIGENVALUE_FLOOR = 1e-12
+KRR_CG_TOL = 1e-6
+KRR_CG_MAX_ITER = 1000
+KRR_CG_BLOCK_SIZE = 2048
+KRR_CG_PYTORCH_DEVICES = "auto"  # "auto" uses all visible GPUs; None uses KRR_PYTORCH_DEVICE.
+KRR_CG_LOG_INTERVAL = 25
 
 KRR_SCORE_METRIC = "neg_mean_absolute_error"
 
