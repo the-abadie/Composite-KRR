@@ -729,7 +729,7 @@ def _predict_batch_from_torch_fold(
     y_train = fold.y_train_transformed
     if y_train.ndim == 1:
         y_train = y_train.reshape(-1, 1)
-    rhs = y_train.unsqueeze(0).expand(K_train.shape[0], -1, -1)
+    rhs = y_train.unsqueeze(0).expand(K_train.shape[0], -1, -1).contiguous()
     dual_coef = _cholesky_solve_spd_batch(K_train, rhs)
 
     K_validation = composite_kernel_from_distances_pytorch(
@@ -743,10 +743,23 @@ def _predict_batch_from_torch_fold(
 
 def _cholesky_solve_spd_batch(K_train, rhs):
     torch = require_torch()
+    if not K_train.is_contiguous():
+        K_train = K_train.contiguous()
+    if not rhs.is_contiguous():
+        rhs = rhs.contiguous()
     factor, info = torch.linalg.cholesky_ex(K_train, upper=False, check_errors=False)
     if bool(torch.any(info != 0).item()):
         raise RuntimeError("Cholesky factorization failed for one or more candidates.")
-    return torch.cholesky_solve(rhs, factor, upper=False)
+    try:
+        return torch.cholesky_solve(rhs, factor, upper=False)
+    except RuntimeError as exc:
+        if _is_cuda_invalid_argument_error(exc):
+            raise RuntimeError(
+                "CUDA cholesky_solve failed with invalid argument. This can "
+                "happen with batched CUDA linear algebra layouts; retrying the "
+                "candidate batch one candidate at a time."
+            ) from exc
+        raise
 
 
 def _score_prediction_batch_pytorch(
@@ -884,6 +897,11 @@ def _inverse_transform_prediction_batch(
 def _is_torch_linalg_error(exc: RuntimeError) -> bool:
     message = str(exc).lower()
     return "linalg" in message or "singular" in message or "cholesky" in message
+
+
+def _is_cuda_invalid_argument_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    return "cuda" in message and "invalid argument" in message
 
 
 def _validate_candidate_arrays(
