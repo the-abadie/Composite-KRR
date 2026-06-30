@@ -31,11 +31,12 @@ except ImportError:
 @dataclass(frozen=True)
 class BayesianSearchResult:
     study: object
-    best_estimator_: object
+    best_estimator_: object | None
     best_params_: dict
     best_score_: float
     best_split_scores_: np.ndarray
     search_history_: list[dict]
+    estimator: object | None = None
 
 
 def fit_bayesian_search(
@@ -58,6 +59,7 @@ def fit_bayesian_search(
     n_trials: int,
     prefix: str,
     stage_name: str = "Bayesian search",
+    refit: bool = True,
     distance_cache=None,
     kernel_weight_center=None,
     kernel_weight_logit_radius: float = 1.5,
@@ -220,14 +222,16 @@ def fit_bayesian_search(
         n_components=n_components,
         kernel_weight_center=kernel_weight_center,
     )
-    best_estimator = _clone_with_params(estimator, prefix=prefix, **best_params)
     best_split_scores = np.asarray(
         study.best_trial.user_attrs.get("split_scores", []),
         dtype=float,
     )
     distance_cache = None
     _release_cached_scoring_memory(cached_scoring_backend=cached_scoring_backend)
-    best_estimator.fit(X, y)
+    best_estimator = None
+    if refit:
+        best_estimator = _clone_with_params(estimator, prefix=prefix, **best_params)
+        best_estimator.fit(X, y)
 
     return BayesianSearchResult(
         study=study,
@@ -236,6 +240,7 @@ def fit_bayesian_search(
         best_score_=float(study.best_value),
         best_split_scores_=best_split_scores,
         search_history_=bayesian_search_history(study, scoring=scoring),
+        estimator=estimator,
     )
 
 

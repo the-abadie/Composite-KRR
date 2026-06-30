@@ -1306,6 +1306,7 @@ def staged_random_search_cv(
             n_trials=n_trials_bayesian,
             prefix=prefix,
             stage_name="Bayesian search",
+            refit=False,
             distance_cache=scoring_distance_cache,
             kernel_weight_center=best_random_params["kernel_weights"],
             kernel_weight_logit_radius=bayesian_weight_logit_radius,

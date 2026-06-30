@@ -208,8 +208,11 @@ def _kernel_component_torch(X_left, X_right, *, component: KernelComponent, torc
 def _squared_euclidean_distance(X_left, X_right, *, torch):
     left_norms = torch.sum(X_left * X_left, dim=1, keepdim=True)
     right_norms = torch.sum(X_right * X_right, dim=1).reshape(1, -1)
-    distances = left_norms + right_norms - 2.0 * (X_left @ X_right.T)
-    return torch.clamp(distances, min=0.0)
+    distances = X_left @ X_right.T
+    distances.mul_(-2.0)
+    distances.add_(left_norms)
+    distances.add_(right_norms)
+    return distances.clamp_(min=0.0)
 
 
 def _resolve_torch(*, dtype, device):
