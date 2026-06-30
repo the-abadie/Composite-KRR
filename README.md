@@ -52,3 +52,32 @@ hyperparameter search it pre-caches fold-local train-to-landmark,
 validation-to-landmark, and landmark-to-landmark distances, so candidates reuse
 the same `O(Nm)` cache instead of refitting through sklearn. It avoids
 materializing the exact `N x N` training kernel.
+
+## Sweeps
+
+Use `sweep_main.py` to run `main.py` over `N_TRAIN`, target, and seed
+combinations without permanently editing `config.py`. Edit the constants at
+the top of the file:
+
+```python
+N_TRAINS = [1000, 5000, 10000]
+SEEDS = [1, 2, 3]
+TARGETS = [
+    {"name": "homo", "path": "sample/QM9/homo.npy"},
+    {"name": "lumo", "path": "sample/QM9/lumo.npy"},
+]
+RUN_COMMAND = [".venv-cu124/bin/python", "main.py"]
+RUN_ENV = {"CUDA_VISIBLE_DEVICES": "0,1,2,3"}
+RESULTS_CSV = "sweep_results.csv"
+```
+
+Then run:
+
+```bash
+./sweep_main.py
+```
+
+The script restores the original `config.py` when it exits if
+`RESTORE_CONFIG = True`. Set `DRY_RUN = True` to inspect generated runs without
+launching training. After each run, it writes the accumulated `N_TRAIN`, seed,
+target, output directory, return code, MAE, and RMSE rows to `RESULTS_CSV`.
