@@ -2,6 +2,7 @@ import logging
 import random
 from os import makedirs
 
+from joblib.logger import shutil
 import numpy as np
 from numpy._core import float32
 from numpy.typing import NDArray
@@ -294,6 +295,7 @@ if len(idx_test) > 0:
         sample_weights = model.dual_coef_tensor_.detach().cpu().numpy()
         np.save(file=f"{config.OUTPUT_DIR}/sample_weights.npy", arr=sample_weights)
 
+    shutil.copy2(src="config.py", dst=f"{config.OUTPUT_DIR}/config.txt")
     np.save(file=f"{config.OUTPUT_DIR}/fold_val_idx.npy", arr=fold_val_idx)
     np.save(file=f"{config.OUTPUT_DIR}/test_idx.npy", arr=fold_val_idx)
     np.save(file=f"{config.OUTPUT_DIR}/y_predictions.npy", arr=y_pred)
