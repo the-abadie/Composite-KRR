@@ -294,12 +294,14 @@ if len(idx_test) > 0:
         sample_weights = model.dual_coef_tensor_.detach().cpu().numpy()
         np.save(file=f"{config.OUTPUT_DIR}/sample_weights.npy", arr=sample_weights)
 
-
+    np.save(file=f"{config.OUTPUT_DIR}/fold_val_idx.npy", arr=fold_val_idx)
+    np.save(file=f"{config.OUTPUT_DIR}/test_idx.npy", arr=fold_val_idx)
     np.save(file=f"{config.OUTPUT_DIR}/y_predictions.npy", arr=y_pred)
     np.save(file=f"{config.OUTPUT_DIR}/y_true.npy", arr=y_test)
     np.save(file=f"{config.OUTPUT_DIR}/gammas.npy", arr=search_result.best_params_["regressor__gammas"])
     np.save(file=f"{config.OUTPUT_DIR}/kernel_weights.npy", arr=search_result.best_params_["regressor__kernel_weights"])
     np.save(file=f"{config.OUTPUT_DIR}/alpha.npy", arr=search_result.best_params_["regressor__alpha"])
+
 postprocess.plot_random_search_validation_error(
     search_result,
     scoring=scoring,
