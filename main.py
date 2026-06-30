@@ -279,9 +279,27 @@ if len(idx_test) > 0:
                 f"{target_mae:.6g} / {target_rmse:.6g}"
             )
 
+
     postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=config.OUTPUT_DIR)
     postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=250, OUTPUT_DIR=config.OUTPUT_DIR)
 
+    final = search_result.best_estimator_   # TransformedTargetRegressor
+    reg = final.regressor_                  # fitted inner KRR estimator
+    model = reg.model_
+
+    if hasattr(model, "dual_coef_"):
+        sample_weights = model.dual_coef_   # NumPy, shape (n_train, n_targets)
+        np.save(file=f"{config.OUTPUT_DIR}/sample_weights.npy", arr=sample_weights)
+    elif hasattr(model, "dual_coef_tensor_"):
+        sample_weights = model.dual_coef_tensor_.detach().cpu().numpy()
+        np.save(file=f"{config.OUTPUT_DIR}/sample_weights.npy", arr=sample_weights)
+
+
+    np.save(file=f"{config.OUTPUT_DIR}/y_predictions.npy", arr=y_pred)
+    np.save(file=f"{config.OUTPUT_DIR}/y_true.npy", arr=y_test)
+    np.save(file=f"{config.OUTPUT_DIR}/gammas.npy", arr=search_result.best_params_["regressor__gammas"])
+    np.save(file=f"{config.OUTPUT_DIR}/kernel_weights.npy", arr=search_result.best_params_["regressor__kernel_weights"])
+    np.save(file=f"{config.OUTPUT_DIR}/alpha.npy", arr=search_result.best_params_["regressor__alpha"])
 postprocess.plot_random_search_validation_error(
     search_result,
     scoring=scoring,
