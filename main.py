@@ -181,6 +181,11 @@ base_estimator = make_composite_krr_regressor(
     random_state=config.SEED,
     nystrom_backend=config.KRR_CACHED_SCORING_BACKEND,
     pytorch_device=config.KRR_PYTORCH_DEVICE,
+    pytorch_predict_batch_size=getattr(
+        config,
+        "KRR_PYTORCH_PREDICT_BATCH_SIZE",
+        2048,
+    ),
     nystrom_batch_size=getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
     nystrom_eigenvalue_floor=getattr(
         config,
@@ -348,6 +353,11 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
             "random_state": config.SEED,
             "nystrom_backend": config.KRR_CACHED_SCORING_BACKEND,
             "pytorch_device": config.KRR_PYTORCH_DEVICE,
+            "pytorch_predict_batch_size": getattr(
+                config,
+                "KRR_PYTORCH_PREDICT_BATCH_SIZE",
+                2048,
+            ),
             "nystrom_batch_size": getattr(config, "KRR_NYSTROM_BATCH_SIZE", 2048),
             "nystrom_eigenvalue_floor": getattr(
                 config,

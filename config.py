@@ -62,6 +62,7 @@ KRR_CACHED_SCORING_BACKEND = "numpy"  # "numpy" or "pytorch"
 KRR_PYTORCH_DEVICE = "auto"  # "auto", "cpu", "cuda", "cuda:0", etc.
 KRR_PYTORCH_DEVICES = None  # None uses KRR_PYTORCH_DEVICE; "auto" uses one GPU per CV fold when available.
 KRR_PYTORCH_CANDIDATE_BATCH_SIZE = 1
+KRR_PYTORCH_PREDICT_BATCH_SIZE = 2048
 KRR_NYSTROM_N_LANDMARKS = 2048
 KRR_NYSTROM_LANDMARK_SELECTION = "random"  # "random" or "first"
 KRR_NYSTROM_BATCH_SIZE = 2048

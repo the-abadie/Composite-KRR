@@ -160,6 +160,10 @@ def validate_config() -> None:
     ):
         raise ValueError("`KRR_PYTORCH_CANDIDATE_BATCH_SIZE` must be a positive int.")
 
+    pytorch_predict_batch_size = getattr(config, "KRR_PYTORCH_PREDICT_BATCH_SIZE", 2048)
+    if type(pytorch_predict_batch_size) is not int or pytorch_predict_batch_size <= 0:
+        raise ValueError("`KRR_PYTORCH_PREDICT_BATCH_SIZE` must be a positive int.")
+
     bayesian_batch_size = getattr(config, "KRR_BAYESIAN_BATCH_SIZE", 1)
     if type(bayesian_batch_size) is not int or bayesian_batch_size < 0:
         raise ValueError("`KRR_BAYESIAN_BATCH_SIZE` must be a non-negative int.")

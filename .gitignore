@@ -4,3 +4,5 @@ __pycache__
 depr
 plot-*
 sample
+atomistic_test_suite
+descriptor_generation

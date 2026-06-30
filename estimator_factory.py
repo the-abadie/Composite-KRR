@@ -26,6 +26,7 @@ def make_composite_krr_regressor(
     random_state=None,
     nystrom_backend: str = "numpy",
     pytorch_device: str | None = "auto",
+    pytorch_predict_batch_size: int = 2048,
     nystrom_batch_size: int = 2048,
     nystrom_eigenvalue_floor: float = 1e-12,
 ):
@@ -39,6 +40,9 @@ def make_composite_krr_regressor(
             pca_whiten=pca_whiten,
             normalize_kernel_weights=normalize_kernel_weights,
             compute_dtype=compute_dtype,
+            backend=nystrom_backend,
+            pytorch_device=pytorch_device,
+            pytorch_predict_batch_size=pytorch_predict_batch_size,
         )
 
     return CompositeNystromKRREstimator(

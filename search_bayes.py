@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import gc
 from time import monotonic
 
 import logging
@@ -224,6 +225,8 @@ def fit_bayesian_search(
         study.best_trial.user_attrs.get("split_scores", []),
         dtype=float,
     )
+    distance_cache = None
+    _release_cached_scoring_memory(cached_scoring_backend=cached_scoring_backend)
     best_estimator.fit(X, y)
 
     return BayesianSearchResult(
@@ -502,6 +505,24 @@ def _cache_distance_dtype(cache):
     if dtype is not None:
         return dtype
     return np.asarray(distance).dtype
+
+
+def _release_cached_scoring_memory(*, cached_scoring_backend: str) -> None:
+    gc.collect()
+    if normalize_cached_scoring_backend(cached_scoring_backend) != "pytorch":
+        return
+
+    try:
+        from pytorch_backend import require_torch
+
+        torch = require_torch()
+    except ImportError:
+        return
+
+    if torch.cuda.is_available():
+        for device_index in range(torch.cuda.device_count()):
+            with torch.cuda.device(device_index):
+                torch.cuda.empty_cache()
 
 
 def _suggest_bayesian_params(

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import gc
 from time import perf_counter
 
 import numpy as np
@@ -34,6 +35,7 @@ from nystrom_cache import (
     nystrom_cache_to_pytorch,
 )
 from kernels import pairwise_self_lp_distance
+from torch_exact_krr import CompositeTorchKRR
 from postprocess import (
     attach_random_search_history,
     combined_random_search_history,
@@ -328,6 +330,9 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         pca_whiten=False,
         normalize_kernel_weights=False,
         compute_dtype,
+        backend="numpy",
+        pytorch_device: str | None = "auto",
+        pytorch_predict_batch_size: int = 2048,
     ):
         self.alpha = alpha
         self.gammas = gammas
@@ -339,9 +344,18 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.pca_whiten = pca_whiten
         self.normalize_kernel_weights = normalize_kernel_weights
         self.compute_dtype = compute_dtype
+        self.backend = backend
+        self.pytorch_device = pytorch_device
+        self.pytorch_predict_batch_size = pytorch_predict_batch_size
 
     def fit(self, X, y):
         compute_dtype = np.dtype(self.compute_dtype)
+        backend = normalize_cached_scoring_backend(self.backend)
+        if (
+            type(self.pytorch_predict_batch_size) is not int
+            or self.pytorch_predict_batch_size <= 0
+        ):
+            raise ValueError("pytorch_predict_batch_size must be a positive int.")
         X_blocks = self._unpack_sample_matrix(X)
         y_array = as_target_array(y, dtype=compute_dtype)
         y_matrix = as_target_matrix(y_array, dtype=compute_dtype)
@@ -413,11 +427,20 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
             )
         ]
 
-        self.model_ = CompositeKRR(
-            components=components,
-            alpha=self.alpha,
-            dtype=compute_dtype,
-        )
+        if backend == "pytorch":
+            self.model_ = CompositeTorchKRR(
+                components=components,
+                alpha=self.alpha,
+                dtype=compute_dtype,
+                device=self.pytorch_device,
+                predict_batch_size=self.pytorch_predict_batch_size,
+            )
+        else:
+            self.model_ = CompositeKRR(
+                components=components,
+                alpha=self.alpha,
+                dtype=compute_dtype,
+            )
         self.model_.fit(X_blocks_t, y_array)
         self.n_features_in_ = n_blocks
         self.names_ = names
@@ -428,6 +451,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.gammas_ = list(np.asarray(gammas, dtype=float))
         self.kernel_weights_ = list(weights)
         self.compute_dtype_ = compute_dtype
+        self.backend_ = backend
 
         return self
 
@@ -1314,6 +1338,12 @@ def staged_random_search_cv(
         prefix=prefix,
         n_components=n_components,
     )
+    if refit:
+        distance_cache = None
+        scoring_distance_cache = None
+        _release_cached_scoring_memory(
+            cached_scoring_backend=cached_scoring_backend,
+        )
     final_estimator = _fit_final_estimator_from_stage(
         selected_stage,
         estimator,
@@ -1753,6 +1783,24 @@ def _fit_final_estimator_from_stage(
     final_estimator.set_params(**final_params)
     final_estimator.fit(X, y)
     return final_estimator
+
+
+def _release_cached_scoring_memory(*, cached_scoring_backend: str) -> None:
+    gc.collect()
+    if normalize_cached_scoring_backend(cached_scoring_backend) != "pytorch":
+        return
+
+    try:
+        from pytorch_backend import require_torch
+
+        torch = require_torch()
+    except ImportError:
+        return
+
+    if torch.cuda.is_available():
+        for device_index in range(torch.cuda.device_count()):
+            with torch.cuda.device(device_index):
+                torch.cuda.empty_cache()
 
 
 def _complete_unprefixed_params_from_estimator(estimator, *, n_components: int) -> dict:
