@@ -243,6 +243,7 @@ class StagedRandomSearchResult:
     final_params: dict
     timings: list[tuple[float, float, str]]
     bayesian_stage: BayesianSearchResult | None = None
+    final_estimator_: object | None = None
 
     @property
     def stages(self) -> tuple[object, ...]:
@@ -264,7 +265,12 @@ class StagedRandomSearchResult:
 
     @property
     def best_estimator_(self):
-        return self.final_stage.best_estimator_
+        if self.final_estimator_ is None:
+            raise AttributeError(
+                "This search result was created with refit=False and does not "
+                "have a fitted best_estimator_."
+            )
+        return self.final_estimator_
 
     @property
     def best_params_(self) -> dict:
@@ -1072,7 +1078,7 @@ def staged_random_search_cv(
         random_state=random_state,
         n_jobs=n_jobs,
         blas_threads=random_search_blas_threads,
-        refit=refit,
+        refit=False,
         stage_name="Stage 1",
         distance_cache=scoring_distance_cache,
         cached_scoring_backend=cached_scoring_backend,
@@ -1083,8 +1089,8 @@ def staged_random_search_cv(
     time_stage1_end:float = perf_counter()
     time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
 
-    stage1_best_params = _complete_unprefixed_params_from_estimator(
-        stage1.best_estimator_,
+    stage1_best_params = _complete_unprefixed_params_from_search(
+        stage1,
         n_components=n_components,
     )
     stage2_alpha_bounds = _narrow_log_bounds_around(
@@ -1122,7 +1128,7 @@ def staged_random_search_cv(
         random_state=random_state,
         n_jobs=n_jobs,
         blas_threads=random_search_blas_threads,
-        refit=refit,
+        refit=False,
         stage_name="Stage 2",
         distance_cache=scoring_distance_cache,
         cached_scoring_backend=cached_scoring_backend,
@@ -1191,7 +1197,7 @@ def staged_random_search_cv(
             random_state=random_state,
             n_jobs=n_jobs,
             blas_threads=random_search_blas_threads,
-            refit=refit,
+            refit=False,
             stage_name="Stage 3",
             distance_cache=scoring_distance_cache,
             cached_scoring_backend=cached_scoring_backend,
@@ -1210,8 +1216,8 @@ def staged_random_search_cv(
         stage3_timing_label = "Training: Stage III (Skipped)"
 
     best_random_stage = _best_search_stage([stage1, stage2, stage3])
-    final_params = _complete_prefixed_params_from_estimator(
-        best_random_stage.best_estimator_,
+    final_params = _complete_prefixed_params_from_search(
+        best_random_stage,
         prefix=prefix,
         n_components=n_components,
     )
@@ -1235,8 +1241,8 @@ def staged_random_search_cv(
 
     bayesian_stage = None
     if n_trials_bayesian is not None and n_trials_bayesian > 0:
-        best_random_params = _complete_unprefixed_params_from_estimator(
-            best_random_stage.best_estimator_,
+        best_random_params = _complete_unprefixed_params_from_search(
+            best_random_stage,
             n_components=n_components,
         )
         bayesian_alpha_bounds = _narrow_log_bounds_around(
@@ -1303,10 +1309,18 @@ def staged_random_search_cv(
             if stage is not None
         ]
     )
-    final_params = _complete_prefixed_params_from_estimator(
-        selected_stage.best_estimator_,
+    final_params = _complete_prefixed_params_from_search(
+        selected_stage,
         prefix=prefix,
         n_components=n_components,
+    )
+    final_estimator = _fit_final_estimator_from_stage(
+        selected_stage,
+        estimator,
+        X,
+        y,
+        final_params=final_params,
+        refit=refit,
     )
     logger.info(
         "Selected %s as final model with CV score %.6g.",
@@ -1320,7 +1334,8 @@ def staged_random_search_cv(
         stage3=stage3,
         final_params=final_params,
         bayesian_stage=bayesian_stage,
-        timings=timings
+        timings=timings,
+        final_estimator_=final_estimator,
     )
 
 
@@ -1680,6 +1695,64 @@ def _complete_prefixed_params_from_estimator(
         n_components=n_components,
     )
     return {f"{prefix}{name}": value for name, value in params.items()}
+
+
+def _complete_prefixed_params_from_search(
+    search,
+    *,
+    prefix: str,
+    n_components: int,
+) -> dict:
+    params = _complete_unprefixed_params_from_search(
+        search,
+        n_components=n_components,
+    )
+    return {f"{prefix}{name}": value for name, value in params.items()}
+
+
+def _complete_unprefixed_params_from_search(search, *, n_components: int) -> dict:
+    best_estimator = getattr(search, "best_estimator_", None)
+    if best_estimator is not None:
+        return _complete_unprefixed_params_from_estimator(
+            best_estimator,
+            n_components=n_components,
+        )
+
+    if not hasattr(search, "estimator") or not hasattr(search, "best_params_"):
+        raise AttributeError(
+            "Search stage must expose either `best_estimator_` or both "
+            "`estimator` and `best_params_`."
+        )
+
+    candidate = clone(search.estimator)
+    if search.best_params_:
+        candidate.set_params(**search.best_params_)
+    return _complete_unprefixed_params_from_estimator(
+        candidate,
+        n_components=n_components,
+    )
+
+
+def _fit_final_estimator_from_stage(
+    selected_stage,
+    estimator,
+    X,
+    y,
+    *,
+    final_params: dict,
+    refit: bool,
+):
+    if not refit:
+        return None
+
+    best_estimator = getattr(selected_stage, "best_estimator_", None)
+    if best_estimator is not None:
+        return best_estimator
+
+    final_estimator = clone(estimator)
+    final_estimator.set_params(**final_params)
+    final_estimator.fit(X, y)
+    return final_estimator
 
 
 def _complete_unprefixed_params_from_estimator(estimator, *, n_components: int) -> dict:
