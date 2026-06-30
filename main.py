@@ -296,8 +296,8 @@ if len(idx_test) > 0:
         np.save(file=f"{config.OUTPUT_DIR}/sample_weights.npy", arr=sample_weights)
 
     shutil.copy2(src="config.py", dst=f"{config.OUTPUT_DIR}/config.txt")
-    np.save(file=f"{config.OUTPUT_DIR}/fold_val_idx.npy", arr=fold_val_idx)
-    np.save(file=f"{config.OUTPUT_DIR}/test_idx.npy", arr=fold_val_idx)
+    np.save(file=f"{config.OUTPUT_DIR}/fold_val_idx.npy", arr=idx_train_val)
+    np.save(file=f"{config.OUTPUT_DIR}/test_idx.npy", arr=idx_test)
     np.save(file=f"{config.OUTPUT_DIR}/y_predictions.npy", arr=y_pred)
     np.save(file=f"{config.OUTPUT_DIR}/y_true.npy", arr=y_test)
     np.save(file=f"{config.OUTPUT_DIR}/gammas.npy", arr=search_result.best_params_["regressor__gammas"])
