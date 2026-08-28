@@ -25,6 +25,7 @@ from config_validation import (
     resolve_pca_components,
     resolve_pca_whiten,
     validate_config,
+    validate_descriptor_config,
 )
 from pathlib import Path
 
@@ -67,8 +68,25 @@ time_start_prepare_descriptor:float = perf_counter()
 descriptors = CompositeDescriptor(
     names=config.X_NAMES, paths=config.X_PATHS, normalizations=config.X_NORMS
 )
-descriptors.load_descriptor_blocks_from_npy()
+descriptors.load_descriptor_blocks()
 DESCRIPTOR_ORDER: int = len(descriptors.blocks)
+DESCRIPTOR_NAMES: list[str] = [block.name for block in descriptors.blocks]
+DESCRIPTOR_NORMALIZATIONS: list[str] = [
+    block.normalization for block in descriptors.blocks
+]
+validate_descriptor_config(DESCRIPTOR_ORDER)
+logger.info(
+    "Effective descriptors: %s",
+    [
+        {
+            "name": block.name,
+            "description": block.description,
+            "normalization": block.normalization,
+            "shape": block.values.shape,
+        }
+        for block in descriptors.blocks
+    ],
+)
 time_end_prepare_descriptor:float = perf_counter()
 time_log.info(f"Descriptor prepared in "
               f"{time_dif(time_start_prepare_descriptor, time_end_prepare_descriptor)}.")
@@ -166,9 +184,9 @@ krr_backend = normalize_krr_backend(getattr(config, "KRR_BACKEND", "exact"))
 
 base_estimator = make_composite_krr_regressor(
     krr_backend=krr_backend,
-    names=config.X_NAMES,
+    names=DESCRIPTOR_NAMES,
     kernel_types=kernel_types,
-    normalizations=config.X_NORMS,
+    normalizations=DESCRIPTOR_NORMALIZATIONS,
     pca_components=pca_components,
     pca_whiten=pca_whiten,
     normalize_kernel_weights=True,
@@ -322,9 +340,9 @@ if config.KRR_EVALUATE_KERNEL_CONTRIBUTIONS:
         search_result,
         X_train_val,
         y_train_val,
-        component_names=config.X_NAMES,
+        component_names=DESCRIPTOR_NAMES,
         kernel_types=kernel_types,
-        normalizations=config.X_NORMS,
+        normalizations=DESCRIPTOR_NORMALIZATIONS,
         pca_components=pca_components,
         pca_whiten=pca_whiten,
         target_normalization=config.Y_NORM,

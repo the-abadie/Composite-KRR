@@ -11,6 +11,12 @@ X_MAX = 10
 X_PATHS = ["sample/QM7/QM7_overlap_leg3_dct_concat.npy"]
 X_NAMES = ["LEG3 Overlap DCT Concatenated"]
 X_NORMS = ["standard" for _ in X_PATHS]
+# For a multi-component descriptor archive, use one .npz path. X_NAMES is
+# ignored, while X_NORMS may contain one value for all components or one value
+# per component in archive order.
+# X_PATHS = ["sample/QM7/QM7_descriptors.npz"]
+# X_NAMES = []
+# X_NORMS = ["standard"]
 # X_PCA_COMPONENTS = [0.99 for _ in X_PATHS]
 # X_PCA_WHITEN = [False for _ in X_PATHS]
 

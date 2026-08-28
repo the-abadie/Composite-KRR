@@ -9,6 +9,47 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Multi-target learning with shared-kernel KRR/CKRR.
 - Config validation
 
+## Descriptor inputs
+
+Descriptors can be supplied either as one `.npy` file per descriptor or as one
+`.npz` archive containing multiple numbered descriptor components. The archive
+format is:
+
+```text
+component_count
+component_0_name
+component_0_desc          # component_0_description is also accepted
+component_0_data
+component_1_name
+component_1_desc
+component_1_data
+...
+```
+
+Component indices must be contiguous from zero. Every `name` and description
+must be a non-empty scalar string, every `data` entry must be a real numeric
+array with a sample axis, component names must be unique, and every component
+must contain the same number of samples. `component_count` is optional, but is
+validated against the numbered data arrays when present. Extra archive entries
+such as `descriptor_name` and `combined` are ignored.
+
+For an archive, configure:
+
+```python
+X_PATHS = ["descriptors.npz"]
+X_NAMES = []                  # ignored; names are read from the archive
+X_NORMS = ["standard"]       # broadcast to every archive component
+KRR_KERNEL = "rbf"           # likewise resolved for every component
+```
+
+Exactly one normalization may be supplied to apply it to every component. To
+configure components individually, provide one normalization per component in
+archive order. Any other normalization count raises an error. The run log
+reports normalization broadcasting and the effective archive-provided names,
+normalizations, and shapes. One kernel is created for every descriptor
+component; per-component kernel and PCA configuration lists must therefore have
+the same length as the archive component count.
+
 ## Multi-target learning
 
 Targets may be scalar or multi-output. A `.npy` target file can have shape

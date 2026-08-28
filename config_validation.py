@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import config
 import numpy as np
 
@@ -80,6 +82,20 @@ def resolve_optional_config_sequence(name: str, values, n_items: int, default) -
     return resolved_values
 
 
+def validate_descriptor_config(n_descriptors: int) -> None:
+    if type(n_descriptors) is not int or n_descriptors <= 0:
+        raise ValueError("The number of descriptors must be a positive int.")
+
+    resolve_kernel_types(n_descriptors)
+
+    for component in resolve_pca_components(n_descriptors):
+        _validate_pca_components(component)
+
+    for whiten in resolve_pca_whiten(n_descriptors):
+        if type(whiten) is not bool:
+            raise ValueError("`X_PCA_WHITEN` values must be bools.")
+
+
 def validate_config() -> None:
     """
     Validates your configuration file to make sure your settings are sane before CKRR runs.
@@ -91,27 +107,25 @@ def validate_config() -> None:
             "or of type `None` for the seed to be set to the number of seconds since epoch."
         )
 
+    descriptor_paths = list(config.X_PATHS)
+    is_npz_archive = (
+        len(descriptor_paths) == 1
+        and Path(descriptor_paths[0]).suffix.lower() == ".npz"
+    )
+    if not is_npz_archive:
+        validate_descriptor_config(len(descriptor_paths))
+
     # if type(config.VERBOSITY) not in {0, 1, 2} or config.VERBOSITY is not None:
     #     raise ValueError(
     #         "`VERBOSITY` must be in {0, 1, 2} for increasing verbosity of logs "
     #         "or of type `None` for the verbosity to be set to 1."
     #     )
 
-    n_descriptors = len(config.X_PATHS)
-    resolve_kernel_types(n_descriptors)
-
     krr_backend = getattr(config, "KRR_BACKEND", "exact")
     if not isinstance(krr_backend, str):
         raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
     if krr_backend.lower() not in {"exact", "dense", "nystrom", "nyström"}:
         raise ValueError('`KRR_BACKEND` must be "exact" or "nystrom".')
-
-    for component in resolve_pca_components(n_descriptors):
-        _validate_pca_components(component)
-
-    for whiten in resolve_pca_whiten(n_descriptors):
-        if type(whiten) is not bool:
-            raise ValueError("`X_PCA_WHITEN` values must be bools.")
 
     if not isinstance(config.KRR_USE_DISTANCE_CACHE, bool):
         raise ValueError("`KRR_USE_DISTANCE_CACHE` must be a bool.")
