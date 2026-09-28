@@ -188,6 +188,12 @@ refused. A `.run.lock` prevents simultaneous jobs writing the same directory.
 If a process is killed, confirm it has stopped before manually removing its lock.
 Use a distinct output directory for each independent job.
 
+Completed runs also write `run_metrics.json` directly from the fitted search
+object, with CV fold errors, test metrics, best parameters, timings, input and
+artifact hashes, and runtime/GPU metadata. `validation_folds.npz` preserves
+global training and validation indices for every CV fold. These engine artifacts
+are the evidence for downstream authoritative reporting under `reports/`.
+
 TOML remains supported, including legacy `[krr]` wrappers. Existing flat uppercase
 JSON/TOML fields remain readable and can be migrated:
 

@@ -351,6 +351,13 @@ def _execute(spec):
         *kernel_contribution_timings,
     ])
 
+    from run_artifacts import save_run_metrics
+    save_run_metrics(
+        spec, search_result, cv, idx_train_val, idx_test, y_train_val,
+        test_summary, elapsed_seconds=time_f - time_0,
+        training_seconds=time_end_training - time_start_training,
+    )
+
 
 def run(configuration):
     """Validate and record one run, then execute it with no shared configuration state."""
