@@ -210,6 +210,15 @@ Newton/Stokes profiles, Slurm rendering, preflight, and submission. It validates
 and freezes each KRR config before submission. Cluster submission still requires
 a fresh matching preflight and explicit confirmation.
 
+Within the `ml-dev` workspace, follow the root [AGENTS.md](../AGENTS.md), the
+[experiment lifecycle](../experiments/README.md#study-lifecycle), and the target
+cluster's [Newton](../docs/NEWTON.md) or [Stokes](../docs/STOKES.md) guide.
+`main.py --config` is the scientific command used inside a planned job; it does
+not replace the workspace's required planning and submission procedure. Set
+the compute backend and worker counts explicitly in the JSON: requesting a GPU
+or CPUs in Slurm does not change `execution.backend`, `execution.n_jobs`, or
+`execution.distance_cache.n_jobs`.
+
 The retained local conveniences also generate independent configs:
 
 - `sweep_main.py`: edit `N_TRAINS`, `SEEDS`, `TARGETS`, and optional `OUTPUT_ROOT`.
