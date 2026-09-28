@@ -7,6 +7,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from class_CompositeKRR import KernelComponent
 from kernel_cache import distance_spec_for_kernel
+from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters
 from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
 
 
@@ -22,6 +23,8 @@ class CompositeTorchKRR:
         dtype: np.dtype | type | str = np.float64,
         device: str | None = "auto",
         predict_batch_size: int = 2048,
+        kernel_products=None,
+        product_weights=None,
     ):
         if alpha <= 0:
             raise ValueError(f"alpha must be positive, got {alpha}.")
@@ -33,6 +36,15 @@ class CompositeTorchKRR:
         self.dtype = np.dtype(dtype)
         self.device = device
         self.predict_batch_size = predict_batch_size
+        self.kernel_products = resolve_kernel_products(kernel_products, len(self.components))
+        self.product_weights = (
+            [1.0] * len(self.kernel_products) if product_weights is None else list(product_weights)
+        )
+        validate_kernel_parameters(
+            [c.gamma for c in self.components],
+            [c.kernel_weight for c in self.components] + self.product_weights,
+            len(self.components), self.kernel_products,
+        )
 
     def fit(self, X_blocks: list[NDArray], y: ArrayLike):
         torch, torch_dtype, torch_device = _resolve_torch(
@@ -57,6 +69,8 @@ class CompositeTorchKRR:
                 X_train_tensors,
                 X_train_tensors,
                 self.components,
+                kernel_products=self.kernel_products,
+                product_weights=self.product_weights,
                 torch=torch,
             )
             diag = torch.arange(K.shape[0], device=torch_device)
@@ -109,6 +123,8 @@ class CompositeTorchKRR:
                     X_batch_tensors,
                     self.X_train_tensors_,
                     self.components,
+                    kernel_products=self.kernel_products,
+                    product_weights=self.product_weights,
                     torch=torch,
                 )
                 batch_pred = K_eval @ self.dual_coef_tensor_
@@ -159,8 +175,17 @@ def _composite_kernel_torch(
     components: list[KernelComponent],
     *,
     torch,
+    kernel_products=(),
+    product_weights=(),
 ):
-    K_total = None
+    return mix_kernel_terms(
+        _base_kernels_torch(X_left_blocks, X_right_blocks, components, torch=torch),
+        [c.kernel_weight for c in components] + list(product_weights),
+        kernel_products,
+    )
+
+
+def _base_kernels_torch(X_left_blocks, X_right_blocks, components, *, torch):
     for component, X_left, X_right in zip(
         components,
         X_left_blocks,
@@ -178,14 +203,7 @@ def _composite_kernel_torch(
             component=component,
             torch=torch,
         )
-        if K_total is None:
-            K_total = K_component
-        else:
-            K_total.add_(K_component)
-
-    if K_total is None:
-        raise ValueError("At least one kernel component is required.")
-    return K_total
+        yield K_component
 
 
 def _kernel_component_torch(X_left, X_right, *, component: KernelComponent, torch):
@@ -201,7 +219,6 @@ def _kernel_component_torch(X_left, X_right, *, component: KernelComponent, torc
 
     kernel.mul_(-float(component.gamma))
     kernel.exp_()
-    kernel.mul_(float(component.kernel_weight))
     return kernel
 
 

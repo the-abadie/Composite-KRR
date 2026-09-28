@@ -24,6 +24,7 @@ DEFAULTS: dict[str, Any] = {
     "STRATIFY": False,
     "N_STRATA": 5,
     "KRR_BACKEND": "exact",
+    "KRR_KERNEL_PRODUCTS": [],
     "KRR_ALPHA_BOUNDS": [1e-9, 1e2],
     "KRR_GAMMA_BOUNDS": [1e-9, 1e2],
     "KRR_RANDOM_SEARCH_STAGE1": 75,
@@ -293,10 +294,15 @@ def json_schema() -> dict[str, Any]:
         "N_SAMPLES": "integer",
         "TRAIN_VAL_SPLIT": "number",
         "KRR_KERNEL": ["string", "array"],
+        "KRR_KERNEL_PRODUCTS": "array",
         "OUTPUT_DIR": "string",
     }
     for name, field_type in typed.items():
         properties[name]["type"] = field_type
+    properties["KRR_KERNEL_PRODUCTS"].update({
+        "description": "Elementwise products of base kernels, using zero-based descriptor indices",
+        "items": {"type": "array", "minItems": 2, "items": {"type": "integer", "minimum": 0}},
+    })
     for name, value in DEFAULTS.items():
         properties[name]["default"] = value
     return {

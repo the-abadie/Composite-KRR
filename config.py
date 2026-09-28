@@ -73,3 +73,6 @@ KRR_SCORE_METRIC = "neg_mean_absolute_error"
 
 OUTPUT_DIR = f"sample/output/{SEED}/{RUN_NAME}"
 OVERWRITE_OK = True
+
+# Elementwise products of zero-based base-kernel indices, appended after additive terms.
+KRR_KERNEL_PRODUCTS = []  # e.g. [[0, 1], [2, 3]]; gamma stays shared with each base kernel.

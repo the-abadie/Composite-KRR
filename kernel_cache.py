@@ -27,6 +27,7 @@ from target_utils import (
     as_target_array,
     as_target_matrix,
 )
+from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters, kernel_term_count
 from utilities import configure_logging
 
 configure_logging(VERBOSITY)
@@ -83,6 +84,7 @@ class DistanceCache:
     available_memory_nbytes: int | None
     memory_budget_nbytes: int | None
     n_jobs: int
+    kernel_products: tuple = ()
 
     @property
     def n_components(self) -> int:
@@ -182,7 +184,9 @@ def build_distance_cache(
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
+    kernel_products=None,
 ) -> DistanceCache:
+    kernel_products = resolve_kernel_products(kernel_products, len(names))
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
@@ -369,6 +373,7 @@ def build_distance_cache(
         available_memory_nbytes=available_memory_nbytes,
         memory_budget_nbytes=memory_budget_nbytes,
         n_jobs=cache_n_jobs,
+        kernel_products=kernel_products,
     )
     logger.info(
         "Precomputed %s fold distance cache using %.2f MiB.",
@@ -761,6 +766,7 @@ def score_fold_from_distances(
     weights: list[float],
     scoring,
     kernel_types: list[str],
+    kernel_products=(),
 ) -> float:
     y_pred = predict_fold_from_distances(
         fold,
@@ -768,6 +774,7 @@ def score_fold_from_distances(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
     )
     return score_predictions(fold.y_validation, y_pred, scoring)
 
@@ -780,6 +787,7 @@ def score_fold_from_distances_pytorch(
     weights: list[float],
     scoring,
     kernel_types: list[str],
+    kernel_products=(),
     device: str | None = "auto",
     dtype=None,
 ) -> float:
@@ -792,6 +800,7 @@ def score_fold_from_distances_pytorch(
         weights=weights,
         scoring=scoring,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         device=device,
         dtype=dtype,
     )
@@ -804,6 +813,7 @@ def predict_fold_from_distances(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
 ) -> NDArray:
     if alpha <= 0:
         raise ValueError(f"alpha must be positive, got {alpha}.")
@@ -814,6 +824,7 @@ def predict_fold_from_distances(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         out=work_buffer_for(
             work_buffers,
             fold.train_distances[0].shape,
@@ -845,6 +856,7 @@ def predict_fold_from_distances(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         out=work_buffer_for(
             work_buffers,
             fold.validation_train_distances[0].shape,
@@ -869,6 +881,7 @@ def predict_fold_from_distances_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     device: str | None = "auto",
     dtype=None,
 ) -> NDArray:
@@ -880,6 +893,7 @@ def predict_fold_from_distances_pytorch(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         device=device,
         dtype=dtype,
     )
@@ -891,15 +905,28 @@ def composite_kernel_from_distances(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     out: NDArray | None = None,
     temp: NDArray | None = None,
 ) -> NDArray:
     if not distances:
         raise ValueError("At least one distance matrix is required.")
-    if not (len(distances) == len(gammas) == len(weights) == len(kernel_types)):
-        raise ValueError("distances, gammas, weights, and kernel_types must have matching lengths.")
+    products = validate_kernel_parameters(gammas, weights, len(distances), kernel_products)
+    if not (len(distances) == len(gammas) == len(kernel_types)):
+        raise ValueError("distances, gammas, and kernel_types must have matching lengths.")
 
     first_distance = distances[0]
+    if products:
+        for distance, kernel_type in zip(distances, kernel_types):
+            distance_spec_for_kernel(kernel_type)
+            if distance.shape != first_distance.shape:
+                raise ValueError("All distance matrices must have the same shape.")
+        if out is not None and out.shape != first_distance.shape:
+            raise ValueError("out must have the same shape as the distances.")
+        return mix_kernel_terms(
+            (np.exp(-float(gamma) * distance) for distance, gamma in zip(distances, gammas)),
+            weights, products, out=out,
+        )
     if out is None:
         out = np.empty_like(first_distance)
     elif out.shape != first_distance.shape:
@@ -944,6 +971,7 @@ def composite_kernel_from_distances_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
 ):
     from pytorch_backend import composite_kernel_from_distances_pytorch as _impl
 
@@ -952,6 +980,7 @@ def composite_kernel_from_distances_pytorch(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
     )
 
 
@@ -1057,13 +1086,14 @@ def extract_target_transformer(estimator):
 def resolve_kernel_hyperparameters(regressor, *, n_components: int):
     alpha = float(regressor.alpha)
     gammas = resolve_sequence("gammas", regressor.gammas, n_components, 1.0)
-    weights = resolve_sequence("kernel_weights", regressor.kernel_weights, n_components, 1.0)
+    weights = resolve_sequence("kernel_weights", regressor.kernel_weights, kernel_term_count(regressor, n_components), 1.0)
 
+    validate_kernel_parameters(gammas, weights, n_components, getattr(regressor, "kernel_products", None))
     gammas = list(np.asarray(gammas, dtype=float))
     weights = np.asarray(weights, dtype=float)
     if getattr(regressor, "normalize_kernel_weights", False):
         weight_sum = weights.sum()
-        if weight_sum <= 0:
+        if weight_sum <= 0 or not np.isfinite(weight_sum):
             raise ValueError("Cannot normalize kernel weights with non-positive sum.")
         weights = weights / weight_sum
 

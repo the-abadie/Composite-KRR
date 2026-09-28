@@ -12,6 +12,8 @@ from cached_scoring import (
     score_candidates_from_cache,
     score_estimator_params_from_cache,
 )
+from kernel_cache import extract_regressor
+from kernel_mixing import kernel_term_count
 from nystrom_cache import is_nystrom_distance_cache, nystrom_cache_to_pytorch
 from postprocess import bayesian_search_history
 from utilities import configure_logging
@@ -80,6 +82,7 @@ def fit_bayesian_search(
     if type(bayesian_batch_size) is not int or bayesian_batch_size < 0:
         raise ValueError("bayesian_batch_size must be a non-negative int.")
 
+    n_terms = kernel_term_count(extract_regressor(estimator), n_components)
     _validate_log_bounds("alpha_bounds", alpha_bounds)
     component_gamma_bounds = _as_component_bounds(gamma_bounds, n_components)
     _validate_kernel_weight_bounds(kernel_weight_bounds)
@@ -99,23 +102,25 @@ def fit_bayesian_search(
     study = optuna.create_study(direction="maximize", sampler=sampler)
 
     unprefixed_initial_params = _unprefix_params(initial_params, prefix)
-    if kernel_weight_center is None and n_components > 1:
+    if kernel_weight_center is None and n_terms > 1:
         kernel_weight_center = unprefixed_initial_params["kernel_weights"]
     kernel_weight_center = (
         None
         if kernel_weight_center is None
-        else _normalize_weights(kernel_weight_center, size=n_components)
+        else _normalize_weights(kernel_weight_center, size=n_terms)
     )
     _enqueue_initial_bayesian_trial(
         study,
         unprefixed_initial_params,
         n_components=n_components,
+        n_terms=n_terms,
     )
 
     def objective(trial):
         params = _suggest_bayesian_params(
             trial,
             n_components=n_components,
+            n_terms=n_terms,
             alpha_bounds=alpha_bounds,
             gamma_bounds=component_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
@@ -194,6 +199,7 @@ def fit_bayesian_search(
             X,
             y,
             n_components=n_components,
+            n_terms=n_terms,
             alpha_bounds=alpha_bounds,
             gamma_bounds=component_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
@@ -220,6 +226,7 @@ def fit_bayesian_search(
     best_params = _params_from_bayesian_trial(
         study.best_trial.params,
         n_components=n_components,
+        n_terms=n_terms,
         kernel_weight_center=kernel_weight_center,
     )
     best_split_scores = np.asarray(
@@ -296,6 +303,7 @@ def _optimize_bayesian_search_batched(
     y,
     *,
     n_components: int,
+    n_terms: int,
     alpha_bounds: tuple[float, float],
     gamma_bounds: list[tuple[float, float]],
     kernel_weight_bounds: tuple[float, float],
@@ -337,6 +345,7 @@ def _optimize_bayesian_search_batched(
             params = _suggest_bayesian_params(
                 trial,
                 n_components=n_components,
+                n_terms=n_terms,
                 alpha_bounds=alpha_bounds,
                 gamma_bounds=gamma_bounds,
                 kernel_weight_bounds=kernel_weight_bounds,
@@ -534,12 +543,14 @@ def _suggest_bayesian_params(
     trial,
     *,
     n_components: int,
+    n_terms: int | None = None,
     alpha_bounds: tuple[float, float],
     gamma_bounds: list[tuple[float, float]],
     kernel_weight_bounds: tuple[float, float],
     kernel_weight_center,
     kernel_weight_logit_radius: float,
 ) -> dict:
+    n_terms = n_components if n_terms is None else n_terms
     params = {
         "alpha": trial.suggest_float(
             "alpha", alpha_bounds[0], alpha_bounds[1], log=True
@@ -552,18 +563,18 @@ def _suggest_bayesian_params(
         ],
     }
 
-    if n_components == 1:
+    if n_terms == 1:
         params["kernel_weights"] = [1.0]
     else:
         _validate_kernel_weight_bounds(kernel_weight_bounds)
-        center_logits = _center_logits(kernel_weight_center, size=n_components)
+        center_logits = _center_logits(kernel_weight_center, size=n_terms)
         logits = [
             trial.suggest_float(
                 f"kernel_weight_logit_{i}",
                 center_logits[i] - kernel_weight_logit_radius,
                 center_logits[i] + kernel_weight_logit_radius,
             )
-            for i in range(n_components)
+            for i in range(n_terms)
         ]
         params["kernel_weights"] = _softmax(logits).tolist()
 
@@ -574,21 +585,23 @@ def _params_from_bayesian_trial(
     trial_params: dict,
     *,
     n_components: int,
+    n_terms: int | None = None,
     kernel_weight_center=None,
 ) -> dict:
+    n_terms = n_components if n_terms is None else n_terms
     params = {
         "alpha": trial_params["alpha"],
         "gammas": [trial_params[f"gamma_{i}"] for i in range(n_components)],
     }
 
-    if n_components == 1:
+    if n_terms == 1:
         params["kernel_weights"] = [1.0]
-    elif all(f"kernel_weight_logit_{i}" in trial_params for i in range(n_components)):
-        logits = [trial_params[f"kernel_weight_logit_{i}"] for i in range(n_components)]
+    elif all(f"kernel_weight_logit_{i}" in trial_params for i in range(n_terms)):
+        logits = [trial_params[f"kernel_weight_logit_{i}"] for i in range(n_terms)]
         params["kernel_weights"] = _softmax(logits).tolist()
     else:
         params["kernel_weights"] = [
-            trial_params[f"kernel_weight_{i}"] for i in range(n_components)
+            trial_params[f"kernel_weight_{i}"] for i in range(n_terms)
         ]
 
     return params
@@ -599,18 +612,20 @@ def _enqueue_initial_bayesian_trial(
     params: dict,
     *,
     n_components: int,
+    n_terms: int | None = None,
 ) -> None:
+    n_terms = n_components if n_terms is None else n_terms
     trial_params = {
         "alpha": params["alpha"],
         **{f"gamma_{i}": params["gammas"][i] for i in range(n_components)},
     }
 
-    if n_components > 1:
-        logits = _center_logits(params["kernel_weights"], size=n_components)
+    if n_terms > 1:
+        logits = _center_logits(params["kernel_weights"], size=n_terms)
         trial_params.update(
             {
                 f"kernel_weight_logit_{i}": logits[i]
-                for i in range(n_components)
+                for i in range(n_terms)
             }
         )
 

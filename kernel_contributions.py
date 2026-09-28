@@ -6,6 +6,7 @@ from sklearn.compose import TransformedTargetRegressor
 
 import postprocess
 import preprocess
+from kernel_mixing import resolve_kernel_products
 from estimator_factory import make_composite_krr_regressor
 from search_random import staged_random_search_cv
 
@@ -20,6 +21,7 @@ def evaluate_kernel_contributions(
     *,
     component_names: list[str],
     kernel_types: list[str],
+    kernel_products=None,
     normalizations: list[str],
     pca_components=None,
     pca_whiten=False,
@@ -95,6 +97,7 @@ def evaluate_kernel_contributions(
             y=y,
             component_names=component_names,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             normalizations=normalizations,
             pca_components=pca_components,
             pca_whiten=pca_whiten,
@@ -129,6 +132,7 @@ def evaluate_kernel_contributions(
             y=y,
             component_names=component_names,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             normalizations=normalizations,
             pca_components=pca_components,
             pca_whiten=pca_whiten,
@@ -168,6 +172,7 @@ def _fit_component_subset(
     y,
     component_names: list[str],
     kernel_types: list[str],
+    kernel_products=None,
     normalizations: list[str],
     pca_components: list,
     pca_whiten: list[bool],
@@ -183,6 +188,12 @@ def _fit_component_subset(
     if not component_indices:
         raise ValueError("At least one component index is required.")
 
+    products = resolve_kernel_products(kernel_products, len(component_names))
+    remap = {old: new for new, old in enumerate(component_indices)}
+    subset_products = [
+        [remap[index] for index in factors]
+        for factors in products if all(index in remap for index in factors)
+    ]
     subset_names = [component_names[index] for index in component_indices]
     subset_kernel_types = [kernel_types[index] for index in component_indices]
     subset_norms = [normalizations[index] for index in component_indices]
@@ -193,6 +204,7 @@ def _fit_component_subset(
             krr_backend=krr_backend,
             names=subset_names,
             kernel_types=subset_kernel_types,
+            kernel_products=subset_products,
             normalizations=subset_norms,
             pca_components=subset_pca_components,
             pca_whiten=subset_pca_whiten,

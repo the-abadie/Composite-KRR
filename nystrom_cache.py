@@ -8,7 +8,9 @@ import numpy as np
 from numpy.typing import NDArray
 from threadpoolctl import threadpool_limits
 
+from kernel_mixing import resolve_kernel_products
 from kernel_cache import (
+    composite_kernel_from_distances,
     UnsupportedDistanceKernelError,
     array_nbytes,
     available_memory_bytes,
@@ -101,6 +103,7 @@ class NystromDistanceCache:
     available_memory_nbytes: int | None
     memory_budget_nbytes: int | None
     n_jobs: int
+    kernel_products: tuple = ()
 
     @property
     def n_components(self) -> int:
@@ -151,7 +154,9 @@ def build_nystrom_distance_cache(
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
+    kernel_products=None,
 ) -> NystromDistanceCache:
+    kernel_products = resolve_kernel_products(kernel_products, len(names))
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
@@ -316,6 +321,7 @@ def build_nystrom_distance_cache(
         available_memory_nbytes=available_memory_nbytes,
         memory_budget_nbytes=memory_budget_nbytes,
         n_jobs=cache_n_jobs,
+        kernel_products=kernel_products,
     )
     if distance_backend == "pytorch":
         return nystrom_cache_to_pytorch(
@@ -578,6 +584,7 @@ def nystrom_cache_to_pytorch(
     return NystromDistanceCache(
         folds=folds,
         names=list(cache.names),
+        kernel_products=cache.kernel_products,
         kernel_types=list(cache.kernel_types),
         normalizations=list(cache.normalizations),
         pca_components=list(cache.pca_components),
@@ -682,6 +689,7 @@ def score_candidates_from_nystrom_cache_numpy(
         gammas,
         weights,
         n_components=cache.n_components,
+        n_terms=cache.n_components + len(cache.kernel_products),
     )
     n_candidates = alphas.shape[0]
     n_folds = len(cache.folds)
@@ -699,6 +707,7 @@ def score_candidates_from_nystrom_cache_numpy(
                     gammas=gammas[candidate_index].tolist(),
                     weights=weights[candidate_index].tolist(),
                     kernel_types=cache.kernel_types,
+                    kernel_products=cache.kernel_products,
                     scoring=scoring,
                 )
         return split_scores
@@ -715,6 +724,7 @@ def score_candidates_from_nystrom_cache_numpy(
                 weights[candidate_index].tolist(),
                 cache.kernel_types,
                 scoring,
+                cache.kernel_products,
             )
             for candidate_index in range(n_candidates)
             for fold_index, fold in enumerate(cache.folds)
@@ -748,6 +758,7 @@ def score_candidates_from_nystrom_cache_pytorch(
         gammas,
         weights,
         n_components=torch_cache.n_components,
+        n_terms=torch_cache.n_components + len(torch_cache.kernel_products),
     )
     n_candidates = alphas.shape[0]
     split_scores = np.empty((n_candidates, len(torch_cache.folds)), dtype=float)
@@ -766,6 +777,7 @@ def score_candidates_from_nystrom_cache_pytorch(
                     weights,
                     torch_cache.kernel_types,
                     scoring,
+                    torch_cache.kernel_products,
                 )
                 for fold_index, fold in enumerate(torch_cache.folds)
             ]
@@ -782,6 +794,7 @@ def score_candidates_from_nystrom_cache_pytorch(
                 weights,
                 torch_cache.kernel_types,
                 scoring,
+                torch_cache.kernel_products,
             )[1]
     return split_scores
 
@@ -795,6 +808,7 @@ def _score_candidate_fold_numpy(
     weights: list[float],
     kernel_types: list[str],
     scoring,
+    kernel_products=(),
 ) -> tuple[int, int, float]:
     score = _safe_score_fold_numpy(
         fold,
@@ -802,6 +816,7 @@ def _score_candidate_fold_numpy(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         scoring=scoring,
     )
     return candidate_index, fold_index, score
@@ -814,6 +829,7 @@ def _safe_score_fold_numpy(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     scoring,
 ) -> float:
     try:
@@ -823,6 +839,7 @@ def _safe_score_fold_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
         )
         return score_predictions(fold.y_validation, y_pred, scoring)
     except np.linalg.LinAlgError:
@@ -836,12 +853,14 @@ def predict_fold_from_nystrom_cache_numpy(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
 ) -> NDArray:
     normalizer = _nystrom_normalizer_numpy(
         fold.landmark_distances,
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         eigenvalue_floor=fold.eigenvalue_floor,
     )
     rank = normalizer.shape[1]
@@ -855,6 +874,7 @@ def predict_fold_from_nystrom_cache_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             row_slice=slice(start, stop),
         )
         Phi = C @ normalizer
@@ -870,6 +890,7 @@ def predict_fold_from_nystrom_cache_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             row_slice=slice(start, stop),
         )
         y_pred[start:stop] = (C @ normalizer) @ beta
@@ -883,6 +904,7 @@ def _nystrom_normalizer_numpy(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     eigenvalue_floor: float,
 ) -> NDArray:
     W = _composite_kernel_from_distance_batch_numpy(
@@ -890,6 +912,7 @@ def _nystrom_normalizer_numpy(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         row_slice=None,
     )
     W = 0.5 * (W + W.T)
@@ -912,22 +935,16 @@ def _composite_kernel_from_distance_batch_numpy(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     row_slice: slice | None,
 ) -> NDArray:
-    K_total = None
-    for distance, gamma, weight, kernel_type in zip(
-        distances,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        distance_spec_for_kernel(kernel_type)
-        values = np.asarray(distance if row_slice is None else distance[row_slice])
-        component = np.exp(-float(gamma) * values) * float(weight)
-        K_total = component if K_total is None else K_total + component
-    if K_total is None:
-        raise ValueError("At least one distance matrix is required.")
-    return K_total
+    return composite_kernel_from_distances(
+        [distance if row_slice is None else distance[row_slice] for distance in distances],
+        gammas=gammas,
+        weights=weights,
+        kernel_types=kernel_types,
+        kernel_products=kernel_products,
+    )
 
 
 def _score_all_candidates_for_torch_fold(
@@ -938,6 +955,7 @@ def _score_all_candidates_for_torch_fold(
     weights: NDArray,
     kernel_types: list[str],
     scoring,
+    kernel_products=(),
 ) -> tuple[int, NDArray]:
     scores = np.empty(alphas.shape[0], dtype=float)
     for candidate_index in range(alphas.shape[0]):
@@ -947,6 +965,7 @@ def _score_all_candidates_for_torch_fold(
             gammas=gammas[candidate_index].tolist(),
             weights=weights[candidate_index].tolist(),
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             scoring=scoring,
         )
     return fold_index, scores
@@ -959,6 +978,7 @@ def _safe_score_fold_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     scoring,
 ) -> float:
     try:
@@ -968,6 +988,7 @@ def _safe_score_fold_pytorch(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
         )
         return score_predictions(fold.y_validation, y_pred, scoring)
     except RuntimeError as exc:
@@ -983,6 +1004,7 @@ def predict_fold_from_nystrom_cache_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
 ) -> NDArray:
     from pytorch_backend import require_torch
 
@@ -997,6 +1019,7 @@ def predict_fold_from_nystrom_cache_pytorch(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             eigenvalue_floor=fold.eigenvalue_floor,
         )
         rank = int(normalizer.shape[1])
@@ -1012,6 +1035,7 @@ def predict_fold_from_nystrom_cache_pytorch(
                 gammas=gammas,
                 weights=weights,
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 row_slice=slice(start, stop),
             )
             Phi = C @ normalizer
@@ -1027,6 +1051,7 @@ def predict_fold_from_nystrom_cache_pytorch(
                 gammas=gammas,
                 weights=weights,
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 row_slice=slice(start, stop),
             )
             pred = (C @ normalizer) @ beta
@@ -1041,6 +1066,7 @@ def _nystrom_normalizer_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     eigenvalue_floor: float,
 ):
     from pytorch_backend import require_torch
@@ -1051,6 +1077,7 @@ def _nystrom_normalizer_pytorch(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         row_slice=None,
     )
     _warm_up_torch_linalg(W.device, W.dtype)
@@ -1074,27 +1101,18 @@ def _composite_kernel_from_distance_batch_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     row_slice: slice | None,
 ):
-    from pytorch_backend import require_torch
+    from pytorch_backend import composite_kernel_from_distances_pytorch
 
-    torch = require_torch()
-    K_total = None
-    for distance, gamma, weight, kernel_type in zip(
-        distances,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        distance_spec_for_kernel(kernel_type)
-        values = distance if row_slice is None else distance[row_slice]
-        gamma_t = torch.as_tensor(gamma, dtype=values.dtype, device=values.device)
-        weight_t = torch.as_tensor(weight, dtype=values.dtype, device=values.device)
-        component = torch.exp(-gamma_t * values) * weight_t
-        K_total = component if K_total is None else K_total + component
-    if K_total is None:
-        raise ValueError("At least one distance matrix is required.")
-    return K_total
+    return composite_kernel_from_distances_pytorch(
+        [distance if row_slice is None else distance[row_slice] for distance in distances],
+        gammas=gammas,
+        weights=weights,
+        kernel_types=kernel_types,
+        kernel_products=kernel_products,
+    )
 
 
 def _warm_up_torch_linalg_for_cache(cache: NystromDistanceCache) -> None:
@@ -1154,6 +1172,7 @@ def _validate_candidate_arrays(
     weights,
     *,
     n_components: int,
+    n_terms: int | None = None,
 ) -> tuple[NDArray, NDArray, NDArray]:
     alphas = np.asarray(alphas, dtype=float).reshape(-1)
     gammas = np.asarray(gammas, dtype=float)
@@ -1165,8 +1184,14 @@ def _validate_candidate_arrays(
     expected_shape = (alphas.shape[0], n_components)
     if gammas.shape != expected_shape:
         raise ValueError(f"gammas must have shape {expected_shape}, got {gammas.shape}.")
+    expected_shape = (alphas.shape[0], n_components if n_terms is None else n_terms)
     if weights.shape != expected_shape:
         raise ValueError(f"weights must have shape {expected_shape}, got {weights.shape}.")
+    if not np.all(np.isfinite(alphas)) or np.any(alphas <= 0):
+        raise ValueError("alphas must be finite and positive.")
+    for name, array in (("gammas", gammas), ("weights", weights)):
+        if not np.all(np.isfinite(array)) or np.any(array < 0):
+            raise ValueError(f"{name} must be finite and non-negative.")
     return alphas, gammas, weights
 
 

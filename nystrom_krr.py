@@ -4,7 +4,9 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, RegressorMixin
 
+from kernel_mixing import mix_kernel_terms, resolve_kernel_products
 from kernel_cache import (
+    resolve_kernel_hyperparameters,
     distance_spec_for_kernel,
     normalize_distance_backend,
     resolve_sequence,
@@ -29,6 +31,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
         alpha=1.0,
         gammas=None,
         kernel_weights=None,
+        kernel_products=None,
         names=None,
         kernel_types=None,
         normalizations=None,
@@ -47,6 +50,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.gammas = gammas
         self.kernel_weights = kernel_weights
+        self.kernel_products = kernel_products
         self.names = names
         self.kernel_types = kernel_types
         self.normalizations = normalizations
@@ -102,17 +106,8 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
             None,
         )
         pca_whiten = resolve_sequence("pca_whiten", self.pca_whiten, n_blocks, False)
-        gammas = resolve_sequence("gammas", self.gammas, n_blocks, 1.0)
-        weights = resolve_sequence("kernel_weights", self.kernel_weights, n_blocks, 1.0)
-
-        weights = np.asarray(weights, dtype=float)
-        if self.normalize_kernel_weights:
-            weight_sum = float(np.sum(weights))
-            if weight_sum <= 0 or not np.isfinite(weight_sum):
-                raise ValueError(
-                    "Cannot normalize kernel weights with non-positive sum."
-                )
-            weights = weights / weight_sum
+        products = resolve_kernel_products(self.kernel_products, n_blocks)
+        _, gammas, weights = resolve_kernel_hyperparameters(self, n_components=n_blocks)
 
         self.X_preprocessors_ = []
         X_blocks_t = []
@@ -151,6 +146,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
                 gammas=np.asarray(gammas, dtype=float),
                 weights=np.asarray(weights, dtype=float),
                 kernel_types=list(kernel_types),
+                kernel_products=products,
                 batch_size=self.batch_size,
                 dtype=compute_dtype,
                 eigenvalue_floor=float(self.eigenvalue_floor),
@@ -164,6 +160,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
                 gammas=np.asarray(gammas, dtype=float),
                 weights=np.asarray(weights, dtype=float),
                 kernel_types=list(kernel_types),
+                kernel_products=products,
                 batch_size=self.batch_size,
                 dtype=compute_dtype,
                 eigenvalue_floor=float(self.eigenvalue_floor),
@@ -177,6 +174,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
         self.target_was_1d_ = y_array.ndim == 1
         self.names_ = names
         self.kernel_types_ = list(kernel_types)
+        self.kernel_products_ = products
         self.normalizations_ = normalizations
         self.pca_components_ = pca_components
         self.pca_whiten_ = pca_whiten
@@ -218,6 +216,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
                 gammas=np.asarray(self.gammas_, dtype=float),
                 weights=np.asarray(self.kernel_weights_, dtype=float),
                 kernel_types=self.kernel_types_,
+                kernel_products=self.kernel_products_,
                 batch_size=self.batch_size,
                 dtype=self.compute_dtype_,
             )
@@ -230,6 +229,7 @@ class CompositeNystromKRREstimator(BaseEstimator, RegressorMixin):
                 gammas=np.asarray(self.gammas_, dtype=float),
                 weights=np.asarray(self.kernel_weights_, dtype=float),
                 kernel_types=self.kernel_types_,
+                kernel_products=self.kernel_products_,
                 batch_size=self.batch_size,
                 dtype=self.compute_dtype_,
                 device=self.pytorch_device,
@@ -271,6 +271,7 @@ def _fit_nystrom_numpy(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     batch_size: int,
     dtype,
     eigenvalue_floor: float,
@@ -280,6 +281,7 @@ def _fit_nystrom_numpy(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         dtype=dtype,
     )
     normalizer = _nystrom_normalizer_numpy(
@@ -298,6 +300,7 @@ def _fit_nystrom_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             dtype=dtype,
         )
         Phi = C @ normalizer
@@ -317,6 +320,7 @@ def _predict_nystrom_numpy(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     batch_size: int,
     dtype,
 ) -> NDArray:
@@ -329,6 +333,7 @@ def _predict_nystrom_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             dtype=dtype,
         )
         y_pred[start:stop] = (C @ normalizer) @ beta
@@ -345,6 +350,7 @@ def _fit_nystrom_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     batch_size: int,
     dtype,
     eigenvalue_floor: float,
@@ -363,6 +369,7 @@ def _fit_nystrom_pytorch(
             gammas=gammas_t,
             weights=weights_t,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             dtype=torch_dtype,
             device=torch_device,
         )
@@ -394,6 +401,7 @@ def _fit_nystrom_pytorch(
                 gammas=gammas_t,
                 weights=weights_t,
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 dtype=torch_dtype,
                 device=torch_device,
             )
@@ -417,6 +425,7 @@ def _predict_nystrom_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     batch_size: int,
     dtype,
     device,
@@ -449,6 +458,7 @@ def _predict_nystrom_pytorch(
                 gammas=gammas_t,
                 weights=weights_t,
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 dtype=torch_dtype,
                 device=torch_device,
             )
@@ -464,28 +474,26 @@ def _composite_self_kernel_numpy(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     dtype,
 ) -> NDArray:
-    K_total = None
-    for X_block, gamma, weight, kernel_type in zip(
-        X_blocks,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        spec = distance_spec_for_kernel(kernel_type)
-        distance = pairwise_self_lp_distance(
-            X_block,
-            p=spec.p,
-            squared=spec.squared,
-            dtype=dtype,
-        )
-        component = _kernel_from_distance_numpy(distance, gamma=gamma, weight=weight)
-        K_total = component if K_total is None else K_total + component
+    def base_kernels():
+        for X_block, gamma, kernel_type in zip(
+            X_blocks,
+            gammas,
+            kernel_types,
+        ):
+            spec = distance_spec_for_kernel(kernel_type)
+            distance = pairwise_self_lp_distance(
+                X_block,
+                p=spec.p,
+                squared=spec.squared,
+                dtype=dtype,
+            )
+            component = _kernel_from_distance_numpy(distance, gamma=gamma, weight=1.0)
+            yield component
 
-    if K_total is None:
-        raise ValueError("At least one descriptor block is required.")
-    return K_total
+    return mix_kernel_terms(base_kernels(), weights, kernel_products)
 
 
 def _composite_cross_kernel_numpy(
@@ -495,30 +503,28 @@ def _composite_cross_kernel_numpy(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     dtype,
 ) -> NDArray:
-    K_total = None
-    for X_left, X_right, gamma, weight, kernel_type in zip(
-        X_left_blocks,
-        X_right_blocks,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        spec = distance_spec_for_kernel(kernel_type)
-        distance = pairwise_cross_lp_distance(
-            X_left,
-            X_right,
-            p=spec.p,
-            squared=spec.squared,
-            dtype=dtype,
-        )
-        component = _kernel_from_distance_numpy(distance, gamma=gamma, weight=weight)
-        K_total = component if K_total is None else K_total + component
+    def base_kernels():
+        for X_left, X_right, gamma, kernel_type in zip(
+            X_left_blocks,
+            X_right_blocks,
+            gammas,
+            kernel_types,
+        ):
+            spec = distance_spec_for_kernel(kernel_type)
+            distance = pairwise_cross_lp_distance(
+                X_left,
+                X_right,
+                p=spec.p,
+                squared=spec.squared,
+                dtype=dtype,
+            )
+            component = _kernel_from_distance_numpy(distance, gamma=gamma, weight=1.0)
+            yield component
 
-    if K_total is None:
-        raise ValueError("At least one descriptor block is required.")
-    return K_total
+    return mix_kernel_terms(base_kernels(), weights, kernel_products)
 
 
 def _kernel_from_distance_numpy(distance, *, gamma: float, weight: float) -> NDArray:
@@ -562,34 +568,32 @@ def _composite_self_kernel_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     dtype,
     device,
 ):
-    K_total = None
-    for X_block, gamma, weight, kernel_type in zip(
-        X_blocks,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        spec = distance_spec_for_kernel(kernel_type)
-        distance = pairwise_self_lp_distance_pytorch(
-            X_block,
-            p=spec.p,
-            squared=spec.squared,
-            dtype=dtype,
-            device=str(device),
-        )
-        component = _kernel_from_distance_pytorch(
-            distance,
-            gamma=gamma,
-            weight=weight,
-        )
-        K_total = component if K_total is None else K_total + component
+    def base_kernels():
+        for X_block, gamma, kernel_type in zip(
+            X_blocks,
+            gammas,
+            kernel_types,
+        ):
+            spec = distance_spec_for_kernel(kernel_type)
+            distance = pairwise_self_lp_distance_pytorch(
+                X_block,
+                p=spec.p,
+                squared=spec.squared,
+                dtype=dtype,
+                device=str(device),
+            )
+            component = _kernel_from_distance_pytorch(
+                distance,
+                gamma=gamma,
+                weight=1.0,
+            )
+            yield component
 
-    if K_total is None:
-        raise ValueError("At least one descriptor block is required.")
-    return K_total
+    return mix_kernel_terms(base_kernels(), weights, kernel_products)
 
 
 def _composite_cross_kernel_pytorch(
@@ -599,36 +603,34 @@ def _composite_cross_kernel_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
     dtype,
     device,
 ):
-    K_total = None
-    for X_left, X_right, gamma, weight, kernel_type in zip(
-        X_left_blocks,
-        X_right_blocks,
-        gammas,
-        weights,
-        kernel_types,
-    ):
-        spec = distance_spec_for_kernel(kernel_type)
-        distance = pairwise_cross_lp_distance_pytorch(
-            X_left,
-            X_right,
-            p=spec.p,
-            squared=spec.squared,
-            dtype=dtype,
-            device=str(device),
-        )
-        component = _kernel_from_distance_pytorch(
-            distance,
-            gamma=gamma,
-            weight=weight,
-        )
-        K_total = component if K_total is None else K_total + component
+    def base_kernels():
+        for X_left, X_right, gamma, kernel_type in zip(
+            X_left_blocks,
+            X_right_blocks,
+            gammas,
+            kernel_types,
+        ):
+            spec = distance_spec_for_kernel(kernel_type)
+            distance = pairwise_cross_lp_distance_pytorch(
+                X_left,
+                X_right,
+                p=spec.p,
+                squared=spec.squared,
+                dtype=dtype,
+                device=str(device),
+            )
+            component = _kernel_from_distance_pytorch(
+                distance,
+                gamma=gamma,
+                weight=1.0,
+            )
+            yield component
 
-    if K_total is None:
-        raise ValueError("At least one descriptor block is required.")
-    return K_total
+    return mix_kernel_terms(base_kernels(), weights, kernel_products)
 
 
 def _kernel_from_distance_pytorch(distance, *, gamma, weight):

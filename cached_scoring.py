@@ -6,6 +6,7 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from sklearn.base import clone
 from threadpoolctl import threadpool_limits
+from kernel_mixing import resolve_kernel_products
 
 from kernel_cache import (
     DistanceCache,
@@ -31,8 +32,8 @@ def resolve_candidate_hyperparameter_arrays(
     Resolve sklearn-style candidate parameter dictionaries into plain arrays.
 
     The returned arrays are the backend-neutral contract used by cached scoring:
-    alphas has shape (n_candidates,), while gammas and weights have shape
-    (n_candidates, n_components).
+    alphas has shape (n_candidates,), gammas (n_candidates, n_components),
+    and weights (n_candidates, n_components + n_products).
     """
     candidates = list(candidates)
     n_candidates = len(candidates)
@@ -40,7 +41,7 @@ def resolve_candidate_hyperparameter_arrays(
 
     alphas = np.empty(n_candidates, dtype=float)
     gammas = np.empty((n_candidates, n_components), dtype=float)
-    weights = np.empty((n_candidates, n_components), dtype=float)
+    weights = np.empty((n_candidates, n_components + len(cache.kernel_products)), dtype=float)
 
     for candidate_index, params in enumerate(candidates):
         alpha, candidate_gammas, candidate_weights = resolve_candidate_params(
@@ -65,6 +66,9 @@ def resolve_candidate_params(
         candidate.set_params(**params)
 
     regressor = extract_regressor(candidate)
+    products = resolve_kernel_products(getattr(regressor, "kernel_products", None), cache.n_components)
+    if products != resolve_kernel_products(cache.kernel_products, cache.n_components):
+        raise ValueError("Candidate kernel_products must match the distance cache layout.")
     return resolve_kernel_hyperparameters(
         regressor,
         n_components=cache.n_components,
@@ -188,6 +192,7 @@ def score_candidates_from_cache_numpy(
         gammas,
         weights,
         n_components=cache.n_components,
+        n_terms=cache.n_components + len(cache.kernel_products),
     )
     n_candidates = alphas.shape[0]
     n_folds = len(cache.folds)
@@ -205,6 +210,7 @@ def score_candidates_from_cache_numpy(
                     gammas=gammas[candidate_index].tolist(),
                     weights=weights[candidate_index].tolist(),
                     kernel_types=cache.kernel_types,
+                    kernel_products=cache.kernel_products,
                     scoring=scoring,
                 )
         return split_scores
@@ -224,6 +230,7 @@ def score_candidates_from_cache_numpy(
                 weights[candidate_index].tolist(),
                 cache.kernel_types,
                 scoring,
+                cache.kernel_products,
             )
             for candidate_index in range(n_candidates)
             for fold_index, fold in enumerate(cache.folds)
@@ -349,6 +356,7 @@ def _validate_candidate_arrays(
     weights,
     *,
     n_components: int,
+    n_terms: int | None = None,
 ) -> tuple[NDArray, NDArray, NDArray]:
     alphas = np.asarray(alphas, dtype=float).reshape(-1)
     gammas = np.asarray(gammas, dtype=float)
@@ -362,9 +370,15 @@ def _validate_candidate_arrays(
     expected_shape = (alphas.shape[0], n_components)
     if gammas.shape != expected_shape:
         raise ValueError(f"gammas must have shape {expected_shape}, got {gammas.shape}.")
+    expected_shape = (alphas.shape[0], n_components if n_terms is None else n_terms)
     if weights.shape != expected_shape:
         raise ValueError(f"weights must have shape {expected_shape}, got {weights.shape}.")
 
+    if not np.all(np.isfinite(alphas)) or np.any(alphas <= 0):
+        raise ValueError("alphas must be finite and positive.")
+    for name, array in (("gammas", gammas), ("weights", weights)):
+        if not np.all(np.isfinite(array)) or np.any(array < 0):
+            raise ValueError(f"{name} must be finite and non-negative.")
     return alphas, gammas, weights
 
 
@@ -377,6 +391,7 @@ def _score_candidate_fold_numpy(
     weights: list[float],
     kernel_types: list[str],
     scoring,
+    kernel_products=(),
 ) -> tuple[int, int, float]:
     score = _safe_score_fold_numpy(
         fold,
@@ -384,6 +399,7 @@ def _score_candidate_fold_numpy(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         scoring=scoring,
     )
     return candidate_index, fold_index, score
@@ -396,6 +412,7 @@ def _safe_score_fold_numpy(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     scoring,
 ) -> float:
     try:
@@ -405,6 +422,7 @@ def _safe_score_fold_numpy(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             scoring=scoring,
         )
     except LinAlgError:

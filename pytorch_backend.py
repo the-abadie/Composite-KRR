@@ -16,6 +16,7 @@ from kernel_cache import (
     inverse_transform_target,
     score_predictions,
 )
+from kernel_mixing import mix_kernel_terms, resolve_kernel_products
 from target_utils import as_target_matrix
 
 _torch_cuda_warmup_lock = threading.Lock()
@@ -43,6 +44,7 @@ class TorchDistanceCache:
     pca_whiten: list[bool]
     device: Any
     dtype: Any
+    kernel_products: tuple = ()
 
     @property
     def n_components(self) -> int:
@@ -176,6 +178,7 @@ def distance_cache_to_pytorch(
     return TorchDistanceCache(
         folds=folds,
         names=list(cache.names),
+        kernel_products=cache.kernel_products,
         kernel_types=list(cache.kernel_types),
         normalizations=list(cache.normalizations),
         pca_components=list(cache.pca_components),
@@ -363,6 +366,7 @@ def composite_kernel_from_distances_pytorch(
     gammas,
     weights,
     kernel_types: list[str],
+    kernel_products=(),
 ):
     if not distances:
         raise ValueError("At least one distance matrix is required.")
@@ -388,28 +392,24 @@ def composite_kernel_from_distances_pytorch(
     if weights.ndim == 1:
         weights = weights.reshape(1, -1)
 
-    if gammas.shape != weights.shape:
-        raise ValueError(f"gammas and weights must have the same shape, got {gammas.shape} and {weights.shape}.")
-    if gammas.shape[1] != len(distances):
-        raise ValueError(
-            f"Expected {len(distances)} gamma/weight columns, got {gammas.shape[1]}."
-        )
-
-    out = None
-    for component_index, (distance, kernel_type) in enumerate(
-        zip(distances, kernel_types)
-    ):
+    products = resolve_kernel_products(kernel_products, len(distances))
+    if gammas.ndim != 2 or gammas.shape[1] != len(distances):
+        raise ValueError(f"Expected {len(distances)} gamma columns.")
+    expected_weights = (gammas.shape[0], len(distances) + len(products))
+    if tuple(weights.shape) != expected_weights:
+        raise ValueError(f"weights must have shape {expected_weights}.")
+    # Values are validated at the estimator/candidate boundary on the CPU;
+    # avoid synchronizing the device for every streamed kernel batch.
+    for distance, kernel_type in zip(distances, kernel_types):
         if distance.shape != first_distance.shape:
-            raise ValueError(
-                "All distance matrices in one composite kernel must have the "
-                f"same shape; got {distance.shape} and {first_distance.shape}."
-            )
+            raise ValueError("All distance matrices must have the same shape.")
         distance_spec_for_kernel(kernel_type)
-        gamma = gammas[:, component_index].reshape(-1, 1, 1)
-        weight = weights[:, component_index].reshape(-1, 1, 1)
-        component = torch.exp(-gamma * distance.unsqueeze(0)) * weight
-        out = component if out is None else out + component
-
+    out = mix_kernel_terms(
+        (torch.exp(-gammas[:, i, None, None] * distance.unsqueeze(0))
+         for i, distance in enumerate(distances)),
+        [weights[:, i, None, None] for i in range(weights.shape[1])],
+        products,
+    )
     return out[0] if single_candidate else out
 
 
@@ -420,6 +420,7 @@ def predict_fold_from_distances_pytorch(
     gammas: list[float],
     weights: list[float],
     kernel_types: list[str],
+    kernel_products=(),
     device: str | None = "auto",
     dtype=None,
 ) -> NDArray:
@@ -430,6 +431,7 @@ def predict_fold_from_distances_pytorch(
         gammas=np.asarray([gammas], dtype=float),
         weights=np.asarray([weights], dtype=float),
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
     )
     return _inverse_transform_prediction_batch(torch_fold, y_pred_batch)[0]
 
@@ -442,6 +444,7 @@ def score_fold_from_distances_pytorch(
     weights: list[float],
     scoring,
     kernel_types: list[str],
+    kernel_products=(),
     device: str | None = "auto",
     dtype=None,
 ) -> float:
@@ -451,6 +454,7 @@ def score_fold_from_distances_pytorch(
         gammas=gammas,
         weights=weights,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         device=device,
         dtype=dtype,
     )
@@ -490,6 +494,7 @@ def score_candidates_from_cache_pytorch(
         gammas,
         weights,
         n_components=torch_cache.n_components,
+        n_terms=torch_cache.n_components + len(torch_cache.kernel_products),
     )
     if candidate_batch_size <= 0:
         raise ValueError("candidate_batch_size must be a positive int.")
@@ -512,6 +517,7 @@ def score_candidates_from_cache_pytorch(
                     torch_cache.kernel_types,
                     scoring,
                     candidate_batch_size,
+                    torch_cache.kernel_products,
                 )
                 for fold_index, fold in enumerate(torch_cache.folds)
             ]
@@ -530,6 +536,7 @@ def score_candidates_from_cache_pytorch(
                     torch_cache.kernel_types,
                     scoring,
                     candidate_batch_size,
+                    torch_cache.kernel_products,
                 )[1]
                 split_scores[:, fold_index] = fold_scores
 
@@ -591,6 +598,7 @@ def _score_all_candidates_for_fold(
     kernel_types: list[str],
     scoring,
     candidate_batch_size: int,
+    kernel_products=(),
 ) -> tuple[int, NDArray]:
     torch = require_torch()
     device = fold.y_train_transformed.device
@@ -608,6 +616,7 @@ def _score_all_candidates_for_fold(
                 gammas=gammas[start:stop],
                 weights=weights[start:stop],
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 scoring=scoring,
             )
 
@@ -649,6 +658,7 @@ def _score_candidate_batch_for_fold(
     gammas: NDArray,
     weights: NDArray,
     kernel_types: list[str],
+    kernel_products=(),
     scoring,
 ) -> NDArray:
     try:
@@ -658,6 +668,7 @@ def _score_candidate_batch_for_fold(
             gammas=gammas,
             weights=weights,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
         )
     except RuntimeError as exc:
         if not _is_torch_linalg_error(exc):
@@ -672,6 +683,7 @@ def _score_candidate_batch_for_fold(
                 gammas=gammas[index : index + 1],
                 weights=weights[index : index + 1],
                 kernel_types=kernel_types,
+                kernel_products=kernel_products,
                 scoring=scoring,
             )[0]
             for index in range(len(alphas))
@@ -699,6 +711,7 @@ def _predict_batch_from_torch_fold(
     gammas: NDArray,
     weights: NDArray,
     kernel_types: list[str],
+    kernel_products=(),
 ):
     torch = require_torch()
     alphas_t = torch.as_tensor(
@@ -722,6 +735,7 @@ def _predict_batch_from_torch_fold(
         gammas=gammas_t,
         weights=weights_t,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
     )
     diag = torch.arange(K_train.shape[1], device=K_train.device)
     K_train[:, diag, diag] = K_train[:, diag, diag] + alphas_t[:, None]
@@ -737,6 +751,7 @@ def _predict_batch_from_torch_fold(
         gammas=gammas_t,
         weights=weights_t,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
     )
     return torch.bmm(K_validation, dual_coef)
 
@@ -910,6 +925,7 @@ def _validate_candidate_arrays(
     weights,
     *,
     n_components: int,
+    n_terms: int | None = None,
 ) -> tuple[NDArray, NDArray, NDArray]:
     alphas = np.asarray(alphas, dtype=float).reshape(-1)
     gammas = np.asarray(gammas, dtype=float)
@@ -923,7 +939,13 @@ def _validate_candidate_arrays(
     expected_shape = (alphas.shape[0], n_components)
     if gammas.shape != expected_shape:
         raise ValueError(f"gammas must have shape {expected_shape}, got {gammas.shape}.")
+    expected_shape = (alphas.shape[0], n_components if n_terms is None else n_terms)
     if weights.shape != expected_shape:
         raise ValueError(f"weights must have shape {expected_shape}, got {weights.shape}.")
 
+    if not np.all(np.isfinite(alphas)) or np.any(alphas <= 0):
+        raise ValueError("alphas must be finite and positive.")
+    for name, array in (("gammas", gammas), ("weights", weights)):
+        if not np.all(np.isfinite(array)) or np.any(array < 0):
+            raise ValueError(f"{name} must be finite and non-negative.")
     return alphas, gammas, weights

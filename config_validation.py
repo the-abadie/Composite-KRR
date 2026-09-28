@@ -1,5 +1,6 @@
 import config
 import numpy as np
+from kernel_mixing import resolve_kernel_products
 
 
 def resolve_kernel_types(n_components: int) -> list[str]:
@@ -98,6 +99,7 @@ def validate_config() -> None:
     #     )
 
     n_descriptors = len(config.X_PATHS)
+    resolve_kernel_products(getattr(config, "KRR_KERNEL_PRODUCTS", None), n_descriptors)
     resolve_kernel_types(n_descriptors)
 
     krr_backend = getattr(config, "KRR_BACKEND", "exact")

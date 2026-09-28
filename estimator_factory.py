@@ -16,6 +16,7 @@ def make_composite_krr_regressor(
     krr_backend: str,
     names,
     kernel_types,
+    kernel_products=None,
     normalizations,
     pca_components,
     pca_whiten,
@@ -35,6 +36,7 @@ def make_composite_krr_regressor(
         return CompositeKRREstimator(
             names=names,
             kernel_types=kernel_types,
+            kernel_products=kernel_products,
             normalizations=normalizations,
             pca_components=pca_components,
             pca_whiten=pca_whiten,
@@ -48,6 +50,7 @@ def make_composite_krr_regressor(
     return CompositeNystromKRREstimator(
         names=names,
         kernel_types=kernel_types,
+        kernel_products=kernel_products,
         normalizations=normalizations,
         pca_components=pca_components,
         pca_whiten=pca_whiten,

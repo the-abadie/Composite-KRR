@@ -7,6 +7,7 @@ from scipy.linalg import solve
 from sklearn.metrics.pairwise import pairwise_kernels
 
 from config import VERBOSITY
+from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters
 from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
 from utilities import configure_logging
 
@@ -22,12 +23,12 @@ class KernelComponent:
     kernel_type: str
 
     def __post_init__(self) -> None:
-        if self.kernel_weight < 0:
+        if not np.isfinite(self.kernel_weight) or self.kernel_weight < 0:
             raise ValueError(
                 f"Kernel component {self.name} has negative weight "
                 f"{self.kernel_weight}."
             )
-        if self.gamma < 0:
+        if not np.isfinite(self.gamma) or self.gamma < 0:
             raise ValueError(
                 f"Kernel component {self.name} has negative gamma {self.gamma}."
             )
@@ -42,6 +43,8 @@ class CompositeKRR:
         components: list[KernelComponent],
         alpha: float,
         dtype: np.dtype | type | str = np.float64,
+        kernel_products=None,
+        product_weights=None,
     ):
         if alpha <= 0:
             raise ValueError(f"alpha must be positive, got {alpha}.")
@@ -49,6 +52,15 @@ class CompositeKRR:
         self.components = list(components) if components is not None else []
         self.alpha = alpha
         self.dtype = np.dtype(dtype)
+        self.kernel_products = resolve_kernel_products(kernel_products, len(self.components))
+        self.product_weights = (
+            [1.0] * len(self.kernel_products) if product_weights is None else list(product_weights)
+        )
+        validate_kernel_parameters(
+            [c.gamma for c in self.components],
+            [c.kernel_weight for c in self.components] + self.product_weights,
+            len(self.components), self.kernel_products,
+        )
 
     def fit(self, X_blocks: list[NDArray], y: ArrayLike):
         y_array = as_target_array(y, dtype=self.dtype)
@@ -120,8 +132,13 @@ class CompositeKRR:
         X_left_blocks: list[NDArray],
         X_right_blocks: list[NDArray],
     ) -> NDArray:
-        K_total = None
+        return mix_kernel_terms(
+            self._base_kernels(X_left_blocks, X_right_blocks),
+            [c.kernel_weight for c in self.components] + self.product_weights,
+            self.kernel_products,
+        )
 
+    def _base_kernels(self, X_left_blocks, X_right_blocks):
         for component, X_left, X_right in zip(
             self.components, X_left_blocks, X_right_blocks
         ):
@@ -138,16 +155,4 @@ class CompositeKRR:
                 filter_params=True,
                 gamma=component.gamma,
             )
-            K = np.asarray(K, dtype=self.dtype)
-            weighted_K = K
-            weighted_K *= component.kernel_weight
-
-            if K_total is None:
-                K_total = weighted_K
-            else:
-                K_total += weighted_K
-
-        if K_total is None:
-            raise ValueError("At least one kernel component is required.")
-
-        return K_total
+            yield np.asarray(K, dtype=self.dtype)

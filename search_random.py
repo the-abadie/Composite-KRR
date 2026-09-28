@@ -12,6 +12,7 @@ from sklearn.model_selection import ParameterSampler, RandomizedSearchCV
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_is_fitted
 
+from kernel_mixing import resolve_kernel_products, kernel_term_count
 from class_CompositeKRR import CompositeKRR, KernelComponent
 from cached_scoring import (
     normalize_cached_scoring_backend,
@@ -323,6 +324,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         alpha=1.0,
         gammas=None,
         kernel_weights=None,
+        kernel_products=None,
         names=None,
         kernel_types=None,
         normalizations=None,
@@ -337,6 +339,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.gammas = gammas
         self.kernel_weights = kernel_weights
+        self.kernel_products = kernel_products
         self.names = names
         self.kernel_types = kernel_types
         self.normalizations = normalizations
@@ -380,18 +383,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         pca_whiten = self._resolve_sequence(
             "pca_whiten", self.pca_whiten, n_blocks, False
         )
-        gammas = self._resolve_sequence("gammas", self.gammas, n_blocks, 1.0)
-        weights = self._resolve_sequence(
-            "kernel_weights", self.kernel_weights, n_blocks, 1.0
-        )
-
-        weights = np.asarray(weights, dtype=float)
-        if self.normalize_kernel_weights:
-            if weights.sum() <= 0:
-                raise ValueError(
-                    "Cannot normalize kernel weights with non-positive sum."
-                )
-            weights = weights / weights.sum()
+        products = resolve_kernel_products(self.kernel_products, n_blocks)
+        _, gammas, weights = resolve_kernel_hyperparameters(self, n_components=n_blocks)
 
         self.X_preprocessors_ = []
         X_blocks_t = []
@@ -430,6 +423,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         if backend == "pytorch":
             self.model_ = CompositeTorchKRR(
                 components=components,
+                kernel_products=products,
+                product_weights=weights[n_blocks:],
                 alpha=self.alpha,
                 dtype=compute_dtype,
                 device=self.pytorch_device,
@@ -438,6 +433,8 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         else:
             self.model_ = CompositeKRR(
                 components=components,
+                kernel_products=products,
+                product_weights=weights[n_blocks:],
                 alpha=self.alpha,
                 dtype=compute_dtype,
             )
@@ -445,6 +442,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.n_features_in_ = n_blocks
         self.names_ = names
         self.kernel_types_ = kernel_types
+        self.kernel_products_ = products
         self.normalizations_ = normalizations
         self.pca_components_ = pca_components
         self.pca_whiten_ = pca_whiten
@@ -530,10 +528,12 @@ def make_param_distributions(
     include_gammas: bool = True,
     include_kernel_weights: bool = True,
     kernel_weight_distribution=None,
+    n_terms: int | None = None,
 ) -> dict:
     if n_components <= 0:
         raise ValueError(f"n_components must be positive, got {n_components}.")
 
+    n_terms = n_components if n_terms is None else n_terms
     param_distributions = {}
     if include_alpha:
         param_distributions[f"{prefix}alpha"] = loguniform(*alpha_bounds)
@@ -541,12 +541,12 @@ def make_param_distributions(
         param_distributions[f"{prefix}gammas"] = LogUniformListBounds(
             _as_component_bounds(gamma_bounds, n_components)
         )
-    if include_kernel_weights and n_components > 1:
+    if include_kernel_weights and n_terms > 1:
         _validate_kernel_weight_bounds(kernel_weight_bounds)
         param_distributions[f"{prefix}kernel_weights"] = (
             kernel_weight_distribution
             if kernel_weight_distribution is not None
-            else SimplexWeightDistribution(n_components)
+            else SimplexWeightDistribution(n_terms)
         )
 
     return param_distributions
@@ -997,6 +997,7 @@ def staged_random_search_cv(
     distance_cache = None
     scoring_distance_cache = None
     regressor = extract_regressor(estimator)
+    n_terms = kernel_term_count(regressor, n_components)
     using_nystrom = is_nystrom_regressor(regressor)
     if use_distance_cache:
         time_cache_start: float = perf_counter()
@@ -1078,7 +1079,7 @@ def staged_random_search_cv(
     stage1_estimator = _clone_with_params(
         estimator,
         prefix=prefix,
-        kernel_weights=_uniform_weights(n_components).tolist(),
+        kernel_weights=_uniform_weights(n_terms).tolist(),
     )
     logger.warning(
         "Beginning Stage 1 broad alpha/gamma scale search with equal "
@@ -1091,6 +1092,7 @@ def staged_random_search_cv(
         y,
         param_distributions=make_param_distributions(
             n_components,
+            n_terms=n_terms,
             alpha_bounds=alpha_bounds,
             gamma_bounds=gamma_prior_bounds,
             prefix=prefix,
@@ -1141,6 +1143,7 @@ def staged_random_search_cv(
         y,
         param_distributions=make_param_distributions(
             n_components,
+            n_terms=n_terms,
             alpha_bounds=stage2_alpha_bounds,
             gamma_bounds=stage2_gamma_bounds,
             kernel_weight_bounds=kernel_weight_bounds,
@@ -1187,13 +1190,13 @@ def staged_random_search_cv(
             for component_index in range(n_components)
         ]
         stage3_weight_distribution = None
-        if n_components > 1:
+        if n_terms > 1:
             stage3_weight_distribution = SimplexWeightDistribution(
-                n_components,
+                n_terms,
                 center=_average_kernel_weights(
                     stage2_top_params,
                     key=f"{prefix}kernel_weights",
-                    n_components=n_components,
+                    n_components=n_terms,
                 ),
                 concentration=stage3_weight_concentration,
             )
@@ -1209,6 +1212,7 @@ def staged_random_search_cv(
             y,
             param_distributions=make_param_distributions(
                 n_components,
+                n_terms=n_terms,
                 alpha_bounds=stage3_alpha_bounds,
                 gamma_bounds=stage3_gamma_bounds,
                 kernel_weight_bounds=kernel_weight_bounds,
@@ -1549,6 +1553,7 @@ def _maybe_build_nystrom_distance_cache(
             y,
             cv,
             names=names,
+            kernel_products=getattr(regressor, "kernel_products", None),
             kernel_types=kernel_types,
             normalizations=normalizations,
             pca_components=pca_components,
@@ -1616,6 +1621,7 @@ def _maybe_build_distance_cache(
             y,
             cv,
             names=names,
+            kernel_products=getattr(regressor, "kernel_products", None),
             kernel_types=kernel_types,
             normalizations=normalizations,
             pca_components=pca_components,
