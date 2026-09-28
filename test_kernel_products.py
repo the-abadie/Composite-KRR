@@ -1,5 +1,9 @@
 """Behavior tests against explicit kernel formulas; Torch is an optional extra."""
 import importlib.util
+import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -197,6 +201,66 @@ class ProductKernelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             KRRConfig.from_mapping(values)
 
+    def test_single_descriptor_square_has_two_search_weights(self):
+        estimator = CompositeKRREstimator(compute_dtype="float64", kernel_products=[[0, 0]])
+        result = staged_random_search_cv(estimator, self.X[:, :1], self.y, n_components=1,
+            alpha_bounds=(0.1, 1), gamma_bounds=(0.1, 1), n_iter_stage1=1,
+            n_iter_stage2=1, n_iter_stage3=1, n_trials_bayesian=2,
+            scoring="neg_mean_absolute_error", cv=self.cv, random_state=2,
+            n_jobs=1, distance_cache_n_jobs=1)
+        self.assertEqual(len(result.best_params_["gammas"]), 1)
+        self.assertEqual(len(result.best_params_["kernel_weights"]), 2)
+        self.assertIn("kernel_weight_logit_1", result.bayesian_stage.study.best_trial.params)
+
+    def test_descriptor_ablation_keeps_only_surviving_products(self):
+        from kernel_contributions import _fit_component_subset
+
+        result = _fit_component_subset([1, 2, 3], label="test drop descriptor 0", X=self.X, y=self.y,
+            component_names=["a", "b", "c", "d"], kernel_types=self.types,
+            kernel_products=self.products, normalizations=["none"] * 4,
+            pca_components=[None] * 4, pca_whiten=[False] * 4,
+            target_normalization="none", compute_dtype="float64",
+            scoring="neg_mean_absolute_error", cv=self.cv, krr_backend="exact", nystrom_kwargs={},
+            search_kwargs=dict(alpha_bounds=(0.1, 1), gamma_bounds=(0.1, 1),
+                               n_iter_stage1=1, n_iter_stage2=1, n_iter_stage3=0,
+                               random_state=1, n_jobs=1, distance_cache_n_jobs=1,
+                               prefix="regressor__"))
+        reg = result.best_estimator_.regressor_
+        self.assertEqual(reg.kernel_products_, ((1, 2),))
+        K = explicit_kernel(self.blocks[1:], self.blocks[1:], self.types[1:], reg.gammas_,
+                            reg.kernel_weights_, [[1, 2]])
+        expected = K @ np.linalg.solve(K + reg.alpha * np.eye(len(self.X)), self.y)
+        assert_allclose(result.best_estimator_.predict(self.X[:, 1:]), expected, atol=1e-12)
+
+    def test_cli_saves_product_model_for_each_backend(self):
+        root = Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp)
+            for index in range(2):
+                np.save(work / f"x{index}.npy", self.blocks[index])
+            np.save(work / "y.npy", self.y[:, 0])
+            for backend in ("exact", "nystrom"):
+                with self.subTest(backend=backend):
+                    values = template()
+                    values.update(X_PATHS=[str(work / "x0.npy"), str(work / "x1.npy")],
+                        X_NAMES=["a", "b"], X_NORMS=["none", "none"], Y_PATH=str(work / "y.npy"),
+                        OUTPUT_DIR=str(work / backend), N_SAMPLES=len(self.X), N_KFOLD=2,
+                        KRR_BACKEND=backend, KRR_KERNEL=["rbf", "laplacian"],
+                        KRR_KERNEL_PRODUCTS=[[0, 1]], KRR_NYSTROM_N_LANDMARKS=5,
+                        KRR_RANDOM_SEARCH_STAGE1=1, KRR_RANDOM_SEARCH_STAGE2=1,
+                        KRR_BAYESIAN_SEARCH_TRIALS=0, KRR_RANDOM_SEARCH_N_JOBS=1,
+                        KRR_DISTANCE_CACHE_N_JOBS=1)
+                    config = work / "run.json"
+                    config.write_text(json.dumps(values))
+                    completed = subprocess.run([sys.executable, str(root / "krr_cli.py"), "run", str(config)],
+                        capture_output=True, text=True,
+                        env={**os.environ, "MPLBACKEND": "Agg", "OPENBLAS_NUM_THREADS": "1"})
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    self.assertEqual(np.load(work / backend / "kernel_weights.npy").shape, (3,))
+                    self.assertEqual(np.load(work / backend / "gammas.npy").shape, (2,))
+                    saved = json.loads((work / backend / "resolved_config.json").read_text())
+                    self.assertEqual(saved["KRR_KERNEL_PRODUCTS"], [[0, 1]])
+
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
     def test_torch_predictions_and_candidate_batches_match_numpy(self):
         import torch
@@ -212,7 +276,10 @@ class ProductKernelTests(unittest.TestCase):
                     cache = self.cache(kind, normalized=True)
                     estimator = TransformedTargetRegressor(regressor=self.estimator(kind, normalizations="standard"),
                                                            transformer=StandardScaler())
-                    a, g, w = resolve_candidate_hyperparameter_arrays(estimator, [{}, {"regressor__alpha": 0.4}], cache)
+                    a, g, w = resolve_candidate_hyperparameter_arrays(estimator, [{}, {
+                        "regressor__alpha": 0.4, "regressor__gammas": [0.3] * 4,
+                        "regressor__kernel_weights": list(reversed(self.weights)),
+                    }], cache)
                     expected_scores = score_candidates_from_cache(alphas=a, gammas=g, weights=w, cache=cache,
                                                                  scoring="neg_mean_absolute_error")
                     actual_scores = score_candidates_from_cache(alphas=a, gammas=g, weights=w, cache=cache,

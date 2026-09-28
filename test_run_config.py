@@ -4,7 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import run_config
 from run_config import KRRConfig, json_schema
 
 
@@ -44,6 +46,24 @@ class KRRConfigTests(unittest.TestCase):
         schema = json_schema()
         self.assertIn("X_PATHS", schema["required"])
         self.assertFalse(schema["additionalProperties"])
+
+    def test_run_imports_supplied_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "descriptor.npy").touch()
+            (root / "target.npy").touch()
+            # A source-tree config must never shadow the supplied run config.
+            (root / "config.py").write_text('RUN_NAME = "source-default"\n')
+            (root / "main.py").write_text(
+                'import config\n'
+                'assert config.RUN_NAME == "supplied-run", config.RUN_NAME\n'
+                'assert config.KRR_KERNEL_PRODUCTS == [[0, 0]]\n'
+            )
+            values = self.sample(root)
+            values.update(RUN_NAME="supplied-run", KRR_KERNEL_PRODUCTS=[[0, 0]])
+            with patch.object(run_config, "__file__", str(root / "run_config.py")):
+                execution = run_config.run(KRRConfig.from_mapping(values))
+            self.assertEqual(execution.returncode, 0)
 
 
 if __name__ == "__main__":

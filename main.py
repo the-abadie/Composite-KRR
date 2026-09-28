@@ -287,7 +287,7 @@ if len(idx_test) > 0:
 
     final = search_result.best_estimator_   # TransformedTargetRegressor
     reg = final.regressor_                  # fitted inner KRR estimator
-    model = reg.model_
+    model = getattr(reg, "model_", reg)
 
     if hasattr(model, "dual_coef_"):
         sample_weights = model.dual_coef_   # NumPy, shape (n_train, n_targets)

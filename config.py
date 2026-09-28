@@ -31,6 +31,8 @@ STRATIFY = True
 N_STRATA = 5
 
 KRR_KERNEL = "rbf"
+# Elementwise products of zero-based base-kernel indices; factors share base gammas.
+KRR_KERNEL_PRODUCTS = []  # e.g. [[0, 1], [2, 3]]
 KRR_BACKEND = "exact"  # "exact" or "nystrom"
 
 KRR_ALPHA_BOUNDS = (1e-9, 1e2)
@@ -73,6 +75,3 @@ KRR_SCORE_METRIC = "neg_mean_absolute_error"
 
 OUTPUT_DIR = f"sample/output/{SEED}/{RUN_NAME}"
 OVERWRITE_OK = True
-
-# Elementwise products of zero-based base-kernel indices, appended after additive terms.
-KRR_KERNEL_PRODUCTS = []  # e.g. [[0, 1], [2, 3]]; gamma stays shared with each base kernel.

@@ -9,6 +9,70 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Multi-target learning with shared-kernel KRR/CKRR.
 - Config validation
 
+## Additive and multiplicative kernels
+
+Each descriptor defines one base kernel with its own bandwidth (`gamma`) and
+RBF or Laplacian type. Set `KRR_KERNEL_PRODUCTS` to add elementwise (Hadamard)
+products of these kernels. Indices are **zero-based**, in `X_NAMES`/`X_PATHS`
+order. The default `[]` preserves additive-only behavior.
+
+For four loaded descriptors, this JSON/TOML-compatible setting adds two products:
+
+```python
+KRR_KERNEL = ["rbf", "laplacian", "rbf", "laplacian"]
+KRR_KERNEL_PRODUCTS = [[0, 1], [2, 3]]
+```
+
+The resulting kernel is
+
+```text
+K = w0*K0 + w1*K1 + w2*K2 + w3*K3 + w4*(K0*K1) + w5*(K2*K3)
+```
+
+Products use the **unweighted** base kernels. Their weights are independent of
+the additive weights: setting `w0 = 0` does not disable `K0*K1`. Factors reuse
+the base kernels' bandwidths, kernel types, and fold-fitted preprocessing.
+Products may have more than two factors (`[0, 1, 2]`) or repeated factors
+(`[0, 0]` for `K0**2`). Invalid indices, single-factor products, and duplicate
+products (including reordered duplicates) are rejected.
+
+For direct Python use, both `CompositeKRREstimator` and
+`CompositeNystromKRREstimator` accept:
+
+```python
+kernel_types=["rbf", "laplacian"]
+kernel_products=[[0, 1]]
+gammas=[0.1, 0.2]                 # one per base descriptor
+kernel_weights=[0.2, 0.3, 0.5]    # base weights first, then product weights
+```
+
+`kernel_weights=None` gives every term weight 1; `normalize_kernel_weights=True`
+normalizes **all** additive and product weights together. Weights must be finite
+and non-negative. The low-level `CompositeKRR` and `CompositeTorchKRR` classes
+keep additive weights in `KernelComponent` and accept `kernel_products` plus
+`product_weights` (defaulting to 1 per product).
+
+All random-search stages and Bayesian search tune one weight per term and one
+gamma per base descriptor. Stage 1 uses equal weights over all terms. Saved
+`kernel_weights.npy` follows the ordering above, while `gammas.npy` remains in
+descriptor order. The product definition is retained in the saved configuration.
+Contribution analysis still measures descriptor removal: dropping a descriptor
+also removes every product containing it, and retained products are remapped
+to the subset's descriptor indices.
+
+Exact fitting, prediction, cached CV, and streamed Nyström support products on
+NumPy and optional PyTorch backends. Select `KRR_CACHED_SCORING_BACKEND =
+"pytorch"` and `KRR_PYTORCH_DEVICE = "cuda"` for GPU execution with a suitable
+Torch installation. Products need no additional descriptor loads or distance
+matrices. Each base kernel is exponentiated once per matrix assembly/candidate
+and reused; only factors needed by products are retained. This trades temporary
+kernel memory for reuse. Prediction/Nyström row batches and Torch candidate
+batches bound that temporary memory. Exact training still uses dense matrices.
+
+Run the regression checks with `.venv/bin/python -m unittest discover -v`.
+The optional Torch parity test runs on CPU and also CUDA when available; it is
+skipped when Torch is absent.
+
 ## Multi-target learning
 
 Targets may be scalar or multi-output. A `.npy` target file can have shape

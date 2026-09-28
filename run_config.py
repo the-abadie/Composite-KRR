@@ -266,7 +266,13 @@ def run(configuration: KRRConfig, *, check: bool = True) -> RunExecution:
             else os.pathsep.join((str(root), prior_pythonpath))
         )
         completed = subprocess.run(
-            [sys.executable, str(root / "main.py")],
+            # Keep the generated config in cwd ahead of the source-tree config.
+            [
+                sys.executable,
+                "-c",
+                "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')",
+                str(root / "main.py"),
+            ],
             cwd=work,
             env=environment,
             check=False,
@@ -327,6 +333,7 @@ def template() -> dict[str, Any]:
         "N_SAMPLES": 1000,
         "TRAIN_VAL_SPLIT": 0.8,
         "KRR_KERNEL": "rbf",
+        "KRR_KERNEL_PRODUCTS": [],
         "OUTPUT_DIR": "/absolute/path/output",
     }
 
@@ -341,4 +348,3 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(payload)
     os.replace(temporary, path)
-
