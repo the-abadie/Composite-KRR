@@ -189,7 +189,7 @@ class ProductKernelTests(unittest.TestCase):
                 self.assertNotIn("gamma_4", result.bayesian_stage.study.best_trial.params)
 
     def test_validated_config_round_trip(self):
-        values = template()
+        values = template(legacy=True)
         values.update(X_NAMES=["a", "b"], X_PATHS=["a.npy", "b.npy"],
                       X_NORMS=["none", "none"], KRR_KERNEL_PRODUCTS=[[0, 1]])
         config = KRRConfig.from_mapping(values)
@@ -241,7 +241,7 @@ class ProductKernelTests(unittest.TestCase):
             np.save(work / "y.npy", self.y[:, 0])
             for backend in ("exact", "nystrom"):
                 with self.subTest(backend=backend):
-                    values = template()
+                    values = template(legacy=True)
                     values.update(X_PATHS=[str(work / "x0.npy"), str(work / "x1.npy")],
                         X_NAMES=["a", "b"], X_NORMS=["none", "none"], Y_PATH=str(work / "y.npy"),
                         OUTPUT_DIR=str(work / backend), N_SAMPLES=len(self.X), N_KFOLD=2,
@@ -259,7 +259,7 @@ class ProductKernelTests(unittest.TestCase):
                     self.assertEqual(np.load(work / backend / "kernel_weights.npy").shape, (3,))
                     self.assertEqual(np.load(work / backend / "gammas.npy").shape, (2,))
                     saved = json.loads((work / backend / "resolved_config.json").read_text())
-                    self.assertEqual(saved["KRR_KERNEL_PRODUCTS"], [[0, 1]])
+                    self.assertEqual(saved["kernel_products"], [["a", "b"]])
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
     def test_torch_predictions_and_candidate_batches_match_numpy(self):

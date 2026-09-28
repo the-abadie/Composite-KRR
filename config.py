@@ -1,3 +1,4 @@
+"""Deprecated historical settings. Active runs read config.json; this file is never imported."""
 SEED = 1
 N_TRAIN = 100
 VERBOSITY = 2

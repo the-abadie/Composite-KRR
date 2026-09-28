@@ -4,8 +4,7 @@ from time import perf_counter
 
 import numpy as np
 import logging
-from utilities import configure_logging, time_dif
-from config import VERBOSITY
+from utilities import time_dif
 from scipy.stats import loguniform
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.model_selection import ParameterSampler, RandomizedSearchCV
@@ -47,7 +46,6 @@ from preprocess import make_data_preprocessor
 from search_bayes import BayesianSearchResult, fit_bayesian_search
 from target_utils import as_target_array, as_target_matrix
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("search")
 
 time_log = logging.getLogger("timing")

@@ -1,0 +1,92 @@
+{
+  "descriptors": [
+    {
+      "id": "LEG3 Overlap DCT Concatenated",
+      "kernel": "rbf",
+      "normalization": "standard",
+      "path": "sample/QM7/QM7_overlap_leg3_dct_concat.npy",
+      "pca_components": null,
+      "pca_whiten": false
+    }
+  ],
+  "execution": {
+    "backend": "numpy",
+    "blas_threads": 1,
+    "distance_cache": {
+      "block_size": 2048,
+      "dtype": "float64",
+      "enabled": true,
+      "memory_fraction": 0.8,
+      "n_jobs": -1
+    },
+    "dtype": "float64",
+    "n_jobs": -1,
+    "torch": {
+      "candidate_batch_size": 1,
+      "device": "auto",
+      "devices": null,
+      "predict_batch_size": 2048
+    }
+  },
+  "kernel_products": [],
+  "model": {
+    "backend": "exact",
+    "nystrom": {
+      "batch_size": 2048,
+      "eigenvalue_floor": 1e-12,
+      "landmark_selection": "random",
+      "n_landmarks": 2048
+    }
+  },
+  "output": {
+    "directory": "sample/output/1/QM7_OVERLAP_CONCAT_DCT_100_0.70frac",
+    "overwrite": true
+  },
+  "reporting": {
+    "contribution_bayesian_trials": null,
+    "kernel_contributions": true
+  },
+  "run_name": "QM7_OVERLAP_CONCAT_DCT_100_0.70frac",
+  "schema_version": 1,
+  "search": {
+    "alpha_bounds": [
+      1e-09,
+      100.0
+    ],
+    "bayesian": {
+      "batch_size": 1,
+      "patience": 25,
+      "timeout": null,
+      "trials": 50
+    },
+    "gamma_bounds": [
+      1e-09,
+      100.0
+    ],
+    "gamma_prior_max_samples": 5000,
+    "random": {
+      "stage1": 75,
+      "stage2": 75,
+      "stage3": 0
+    },
+    "scoring": "neg_mean_absolute_error",
+    "top_k_fraction": 0.25,
+    "top_k_min_candidates": 5
+  },
+  "seed": 1,
+  "split": {
+    "mode": "random",
+    "n_folds": 5,
+    "n_samples": 7165,
+    "n_strata": 5,
+    "n_train": 100,
+    "stratify": true,
+    "train_fraction": null
+  },
+  "target": {
+    "name": "atomization energy",
+    "normalization": "standard",
+    "path": "sample/QM7/atomization_energy.npy"
+  },
+  "verbosity": 2
+}

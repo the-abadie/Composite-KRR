@@ -1,350 +1,217 @@
-"""Typed, serializable configuration and single-run process interface."""
-
+"""Load, validate, resolve, and execute independent JSON/TOML run configurations."""
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import pprint
-import subprocess
-import sys
-import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Mapping
 
-
-DEFAULTS: dict[str, Any] = {
-    "VERBOSITY": 2,
-    "RUN_NAME": "krr-run",
-    "USE_PREDEFINED_SPLITS": False,
-    "N_KFOLD": 5,
-    "STRATIFY": False,
-    "N_STRATA": 5,
-    "KRR_BACKEND": "exact",
-    "KRR_KERNEL_PRODUCTS": [],
-    "KRR_ALPHA_BOUNDS": [1e-9, 1e2],
-    "KRR_GAMMA_BOUNDS": [1e-9, 1e2],
-    "KRR_RANDOM_SEARCH_STAGE1": 75,
-    "KRR_RANDOM_SEARCH_STAGE2": 75,
-    "KRR_RANDOM_SEARCH_STAGE3": 0,
-    "KRR_TOP_K_FRACTION": 0.25,
-    "KRR_TOP_K_MIN_CANDIDATES": 5,
-    "KRR_BAYESIAN_SEARCH_TRIALS": 50,
-    "KRR_BAYESIAN_SEARCH_TIMEOUT": None,
-    "KRR_BAYESIAN_SEARCH_PATIENCE": 25,
-    "KRR_BAYESIAN_BATCH_SIZE": 1,
-    "KRR_EVALUATE_KERNEL_CONTRIBUTIONS": False,
-    "KRR_KERNEL_CONTRIBUTION_BAYESIAN_SEARCH_TRIALS": None,
-    "KRR_RANDOM_SEARCH_N_JOBS": -1,
-    "KRR_RANDOM_SEARCH_BLAS_THREADS": 1,
-    "KRR_COMPUTE_DTYPE": "float64",
-    "KRR_USE_DISTANCE_CACHE": True,
-    "KRR_DISTANCE_BLOCK_SIZE": 2048,
-    "KRR_DISTANCE_CACHE_DTYPE": "float64",
-    "KRR_DISTANCE_CACHE_N_JOBS": -1,
-    "KRR_DISTANCE_CACHE_MEMORY_FRACTION": 0.8,
-    "KRR_GAMMA_PRIOR_MAX_SAMPLES": 5000,
-    "KRR_CACHED_SCORING_BACKEND": "numpy",
-    "KRR_PYTORCH_DEVICE": "auto",
-    "KRR_PYTORCH_DEVICES": None,
-    "KRR_PYTORCH_CANDIDATE_BATCH_SIZE": 1,
-    "KRR_PYTORCH_PREDICT_BATCH_SIZE": 2048,
-    "KRR_NYSTROM_N_LANDMARKS": 2048,
-    "KRR_NYSTROM_LANDMARK_SELECTION": "random",
-    "KRR_NYSTROM_BATCH_SIZE": 2048,
-    "KRR_NYSTROM_EIGENVALUE_FLOOR": 1e-12,
-    "KRR_SCORE_METRIC": "neg_mean_absolute_error",
-    "OVERWRITE_OK": False,
-}
-
-REQUIRED_FIELDS = {
-    "SEED",
-    "X_PATHS",
-    "X_NAMES",
-    "X_NORMS",
-    "Y_PATH",
-    "Y_NAME",
-    "Y_NORM",
-    "N_SAMPLES",
-    "TRAIN_VAL_SPLIT",
-    "KRR_KERNEL",
-    "OUTPUT_DIR",
-}
-
-OPTIONAL_FIELDS = {
-    "N_TRAIN",
-    "X_PCA_COMPONENTS",
-    "X_PCA_WHITEN",
-    "PREDEF_TRAINING_IDX_PATH",
-    "PREDEF_VAL_KFOLD_IDX_PATH",
-    "PREDEF_TESTING_IDX_PATH",
-}
-
-ALLOWED_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS | set(DEFAULTS)
-PATH_FIELDS = {
-    "Y_PATH",
-    "OUTPUT_DIR",
-    "PREDEF_TRAINING_IDX_PATH",
-    "PREDEF_VAL_KFOLD_IDX_PATH",
-    "PREDEF_TESTING_IDX_PATH",
-}
+from config_schema import RunConfig
+from legacy_config import PREDEFINED_FIELDS, ALLOWED_FIELDS, from_flat, to_flat
 
 
-def _json_copy(value: Mapping[str, Any]) -> dict[str, Any]:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    decoded = json.loads(encoded)
-    if not isinstance(decoded, dict):
-        raise TypeError("KRR configuration must be an object")
-    return decoded
+def _object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON key: {key}")
+        result[key] = value
+    return result
 
 
-def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def _invalid_constant(value):
+    raise ValueError(f"Non-finite JSON number: {value}")
+
+
+def parse_json(text):
+    return json.loads(text, object_pairs_hook=_object, parse_constant=_invalid_constant)
+
+
+def parse_assignment(value: str) -> tuple[str, Any]:
+    key, separator, raw = value.partition("=")
+    if not separator or not all(part.isidentifier() for part in key.split(".")):
+        raise ValueError(f"Expected field.path=JSON, got {value!r}")
+    return key, parse_json(raw)
+
+
+def write_immutable(path: Path, text: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x") as handle:
+            handle.write(text)
+    except FileExistsError:
+        if path.read_text() != text:
+            raise FileExistsError(f"Refusing to replace different configuration: {path}") from None
 
 
 @dataclass(frozen=True)
 class KRRConfig:
-    """A fully resolved, JSON-safe configuration for one KRR run."""
-
-    values: dict[str, Any]
+    spec: RunConfig
     source_path: Path | None = None
 
     @classmethod
-    def from_mapping(
-        cls,
-        values: Mapping[str, Any],
-        *,
-        source_path: str | Path | None = None,
-    ) -> "KRRConfig":
-        unknown = set(values) - ALLOWED_FIELDS
-        if unknown:
-            raise ValueError(f"Unknown KRR configuration fields: {sorted(unknown)}")
-        resolved = {**DEFAULTS, **_json_copy(values)}
-        missing = sorted(REQUIRED_FIELDS - set(values))
-        if missing:
-            raise ValueError(f"Missing required KRR configuration fields: {missing}")
-        if "N_TRAIN" not in resolved:
-            resolved["N_TRAIN"] = int(
-                float(resolved["N_SAMPLES"]) * float(resolved["TRAIN_VAL_SPLIT"])
-            )
-        source = None if source_path is None else Path(source_path).resolve()
-        configuration = cls(_json_copy(resolved), source)
-        configuration.validate(check_paths=False)
-        return configuration
+    def from_mapping(cls, values: Mapping[str, Any], *, source_path=None):
+        if not isinstance(values, Mapping):
+            raise ValueError("KRR configuration must be an object.")
+        document = dict(values)
+        if set(document) == {"krr"}:
+            if not isinstance(document["krr"], dict):
+                raise ValueError("krr must contain a configuration object.")
+            document = document["krr"]
+        if any(key in ALLOWED_FIELDS for key in document):
+            document = from_flat(document)
+        # Literal equality alone also accepts True and 1.0.
+        if "schema_version" in document and type(document["schema_version"]) is not int:
+            raise ValueError("schema_version must be integer 1.")
+        return cls(RunConfig.model_validate(document), Path(source_path).resolve() if source_path else None)
 
     @classmethod
-    def load(cls, path: str | Path) -> "KRRConfig":
-        source = Path(path).resolve()
-        if source.suffix.lower() == ".toml":
-            document = tomllib.loads(source.read_text())
+    def load(cls, path):
+        path = Path(path).resolve()
+        if path.suffix.lower() == ".json":
+            values = parse_json(path.read_text())
+        elif path.suffix.lower() == ".toml":
+            values = tomllib.loads(path.read_text())
         else:
-            document = json.loads(source.read_text())
-        if "krr" in document and isinstance(document["krr"], dict):
-            document = document["krr"]
-        if not isinstance(document, dict):
-            raise TypeError("KRR configuration file must contain an object")
-        return cls.from_mapping(document, source_path=source)
+            raise ValueError("Configuration must be JSON or TOML; Python files are not executed.")
+        return cls.from_mapping(values, source_path=path)
 
-    def resolved(self) -> "KRRConfig":
-        base = self.source_path.parent if self.source_path is not None else Path.cwd()
-        values = _json_copy(self.values)
-        values["X_PATHS"] = [str(_resolve_path(base, item)) for item in values["X_PATHS"]]
-        for field in PATH_FIELDS:
-            if values.get(field) is not None:
-                values[field] = str(_resolve_path(base, values[field]))
-        return KRRConfig(values, self.source_path)
+    @property
+    def values(self):
+        """Legacy flat view for callers migrating to .spec; never shared mutable state."""
+        return to_flat(self.spec)
 
-    def validate(self, *, check_paths: bool = True) -> None:
-        values = self.values
-        if values["SEED"] is not None and not _is_int(values["SEED"]):
-            raise ValueError("SEED must be an integer or null")
-        if not _is_int(values["N_SAMPLES"]) or values["N_SAMPLES"] <= 0:
-            raise ValueError("N_SAMPLES must be a positive integer")
-        if not 0 < float(values["TRAIN_VAL_SPLIT"]) < 1:
-            raise ValueError("TRAIN_VAL_SPLIT must be between zero and one")
-        for field in ("X_PATHS", "X_NAMES", "X_NORMS"):
-            if not isinstance(values[field], list) or not values[field]:
-                raise ValueError(f"{field} must be a non-empty list")
-        width = len(values["X_PATHS"])
-        if len(values["X_NAMES"]) != width or len(values["X_NORMS"]) != width:
-            raise ValueError("X_PATHS, X_NAMES, and X_NORMS must have equal lengths")
-        kernels = values["KRR_KERNEL"]
-        if isinstance(kernels, list) and len(kernels) != width:
-            raise ValueError("KRR_KERNEL list length must match X_PATHS")
-        if not isinstance(kernels, (str, list)):
-            raise ValueError("KRR_KERNEL must be a string or list of strings")
-        if values["USE_PREDEFINED_SPLITS"]:
-            required = {
-                "PREDEF_TRAINING_IDX_PATH",
-                "PREDEF_VAL_KFOLD_IDX_PATH",
-                "PREDEF_TESTING_IDX_PATH",
-            }
-            missing = sorted(name for name in required if not values.get(name))
-            if missing:
-                raise ValueError(f"Predefined split configuration is missing: {missing}")
+    def with_overrides(self, overrides: Mapping[str, Any]):
+        if not overrides:
+            return self
+        if any(key in ALLOWED_FIELDS for key in overrides):
+            if any(key not in ALLOWED_FIELDS for key in overrides):
+                raise ValueError("Do not mix legacy uppercase and structured overrides.")
+            values = self.values
+            if self.spec.split.mode == "random" and self.spec.split.train_fraction is not None:
+                values.pop("N_TRAIN", None)
+            if "N_TRAIN" in overrides and "TRAIN_VAL_SPLIT" not in overrides:
+                values.pop("TRAIN_VAL_SPLIT", None)
+            if "TRAIN_VAL_SPLIT" in overrides and "N_TRAIN" not in overrides:
+                values.pop("N_TRAIN", None)
+            values.update(overrides)
+            return self.from_mapping(values, source_path=self.source_path)
+        document = self.spec.model_dump(mode="json")
+        if "split.n_train" in overrides and "split.train_fraction" not in overrides:
+            document["split"].pop("train_fraction", None)
+        if "split.train_fraction" in overrides and "split.n_train" not in overrides:
+            document["split"].pop("n_train", None)
+        for path, value in overrides.items():
+            target = document
+            keys = path.split(".")
+            for key in keys[:-1]:
+                if key not in target or not isinstance(target[key], dict):
+                    raise ValueError(f"Unknown configuration path: {path}")
+                target = target[key]
+            target[keys[-1]] = value
+        return self.from_mapping(document, source_path=self.source_path)
 
-        # Reuse the library's detailed cross-field validation without changing
-        # its compatibility import of config.py.
-        import config_validation
+    def resolved(self, *, workspace=None):
+        base = self.source_path.parent if self.source_path else Path.cwd()
+        workspace = Path(workspace).resolve() if workspace else Path(__file__).resolve().parent.parent
+        roots = {"@workspace": workspace, "@krr": workspace / "Composite-KRR",
+                 "@experiments": workspace / "experiments", "@reports": workspace / "reports"}
+        def resolve(value):
+            for token, root in roots.items():
+                if value == token or value.startswith(token + "/"):
+                    return str((root / value[len(token):].lstrip("/")).resolve())
+            if value.startswith("@"):
+                raise ValueError(f"Unknown workspace path token: {value}")
+            path = Path(value).expanduser()
+            return str((path if path.is_absolute() else base / path).resolve())
+        document = self.spec.model_dump(mode="json")
+        for descriptor in document["descriptors"]:
+            descriptor["path"] = resolve(descriptor["path"])
+        document["target"]["path"] = resolve(document["target"]["path"])
+        document["output"]["directory"] = resolve(document["output"]["directory"])
+        if self.spec.split.mode == "predefined":
+            for field in PREDEFINED_FIELDS.values():
+                document["split"][field] = resolve(document["split"][field])
+        return self.from_mapping(document, source_path=self.source_path)
 
-        original = config_validation.config
-        config_validation.config = SimpleNamespace(**values)
-        try:
-            config_validation.validate_config()
-        finally:
-            config_validation.config = original
+    def portable(self, workspace):
+        """Resolve relative paths, retaining workspace-relative tokens for cluster transfer."""
+        root = Path(workspace).resolve()
+        document = self.resolved(workspace=root).spec.model_dump(mode="json")
+        def convert(value):
+            try:
+                return "@workspace/" + str(Path(value).relative_to(root))
+            except ValueError:
+                return value
+        for descriptor in document["descriptors"]:
+            descriptor["path"] = convert(descriptor["path"])
+        document["target"]["path"] = convert(document["target"]["path"])
+        document["output"]["directory"] = convert(document["output"]["directory"])
+        if self.spec.split.mode == "predefined":
+            for field in PREDEFINED_FIELDS.values():
+                document["split"][field] = convert(document["split"][field])
+        return self.from_mapping(document)
 
+    def validate(self, *, check_paths=True):
+        spec = self.resolved().spec
         if check_paths:
-            resolved = self.resolved().values
-            input_paths = [Path(item) for item in resolved["X_PATHS"]]
-            input_paths.append(Path(resolved["Y_PATH"]))
-            if resolved["USE_PREDEFINED_SPLITS"]:
-                input_paths.extend(
-                    Path(resolved[name])
-                    for name in (
-                        "PREDEF_TRAINING_IDX_PATH",
-                        "PREDEF_VAL_KFOLD_IDX_PATH",
-                        "PREDEF_TESTING_IDX_PATH",
-                    )
-                )
-            missing_paths = [str(path) for path in input_paths if not path.is_file()]
-            if missing_paths:
-                raise FileNotFoundError(f"KRR input files do not exist: {missing_paths}")
+            paths = [(d.path, {".npy"}) for d in spec.descriptors]
+            paths.append((spec.target.path, {".npy", ".npz"}))
+            if spec.split.mode == "predefined":
+                paths.extend([(spec.split.train_indices, {".npy"}),
+                              (spec.split.validation_folds, {".npy", ".npz"}),
+                              (spec.split.test_indices, {".npy"})])
+            for value, extensions in paths:
+                path = Path(value)
+                if path.suffix.lower() not in extensions:
+                    raise ValueError(f"Expected {sorted(extensions)} input: {path}")
+                if not path.is_file():
+                    raise FileNotFoundError(f"Input file does not exist: {path}")
+        from sklearn.metrics import get_scorer
+        get_scorer("neg_root_mean_squared_error" if spec.search.scoring == "rmse" else spec.search.scoring)
 
-    def canonical_json(self) -> str:
-        return json.dumps(
-            self.resolved().values,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
+    def canonical_json(self):
+        return json.dumps(self.spec.model_dump(mode="json"), sort_keys=True, indent=2, allow_nan=False) + "\n"
 
-    def sha256(self) -> str:
+    def sha256(self):
         return hashlib.sha256(self.canonical_json().encode()).hexdigest()
-
-    def python_source(self) -> str:
-        lines = ["# Generated from a validated resolved KRR configuration.\n"]
-        for name in sorted(self.resolved().values):
-            lines.append(f"{name} = {pprint.pformat(self.resolved().values[name])}\n")
-        return "".join(lines)
 
 
 @dataclass(frozen=True)
 class RunExecution:
     returncode: int
-    output_directory: Path
+    output_dir: Path
     config_sha256: str
 
-
-def run(configuration: KRRConfig, *, check: bool = True) -> RunExecution:
-    """Execute one validated configuration in an isolated compatibility process."""
-
-    resolved = configuration.resolved()
-    resolved.validate(check_paths=True)
-    output = Path(resolved.values["OUTPUT_DIR"])
-    output.mkdir(parents=True, exist_ok=True)
-    resolved_path = output / "resolved_config.json"
-    document = json.loads(resolved.canonical_json())
-    if resolved_path.exists():
-        if json.loads(resolved_path.read_text()) != document:
-            raise FileExistsError(f"Changed resolved configuration at {resolved_path}")
-    else:
-        _write_json_atomic(resolved_path, document)
-
-    root = Path(__file__).resolve().parent
-    with tempfile.TemporaryDirectory(prefix="ckrr-run-") as temporary:
-        work = Path(temporary)
-        (work / "config.py").write_text(resolved.python_source())
-        environment = dict(os.environ)
-        prior_pythonpath = environment.get("PYTHONPATH")
-        environment["PYTHONPATH"] = (
-            str(root)
-            if not prior_pythonpath
-            else os.pathsep.join((str(root), prior_pythonpath))
-        )
-        completed = subprocess.run(
-            # Keep the generated config in cwd ahead of the source-tree config.
-            [
-                sys.executable,
-                "-c",
-                "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')",
-                str(root / "main.py"),
-            ],
-            cwd=work,
-            env=environment,
-            check=False,
-        )
-    if check and completed.returncode:
-        raise subprocess.CalledProcessError(completed.returncode, completed.args)
-    return RunExecution(completed.returncode, output, resolved.sha256())
+    @property
+    def output_directory(self):
+        return self.output_dir
 
 
-def json_schema() -> dict[str, Any]:
-    """Return a machine-readable discovery schema for agents and editors."""
+def run(configuration: KRRConfig) -> RunExecution:
+    """Execute with an explicit configuration; no generated Python or global config imports."""
+    from runner import run as execute
+    return execute(configuration)
 
-    properties: dict[str, Any] = {
-        name: {"description": "Composite-KRR configuration field"}
-        for name in sorted(ALLOWED_FIELDS)
-    }
-    typed = {
-        "SEED": ["integer", "null"],
-        "X_PATHS": "array",
-        "X_NAMES": "array",
-        "X_NORMS": "array",
-        "Y_PATH": "string",
-        "Y_NAME": "string",
-        "Y_NORM": "string",
-        "N_SAMPLES": "integer",
-        "TRAIN_VAL_SPLIT": "number",
-        "KRR_KERNEL": ["string", "array"],
-        "KRR_KERNEL_PRODUCTS": "array",
-        "OUTPUT_DIR": "string",
-    }
-    for name, field_type in typed.items():
-        properties[name]["type"] = field_type
-    properties["KRR_KERNEL_PRODUCTS"].update({
-        "description": "Elementwise products of base kernels, using zero-based descriptor indices",
-        "items": {"type": "array", "minItems": 2, "items": {"type": "integer", "minimum": 0}},
+
+def json_schema():
+    return RunConfig.model_json_schema()
+
+
+def template(*, legacy=False):
+    config = KRRConfig.from_mapping({
+        "schema_version": 1, "seed": 1, "run_name": "example",
+        "descriptors": [{"id": "descriptor", "path": "descriptor.npy", "kernel": "rbf"}],
+        "target": {"path": "target.npy", "name": "target"},
+        "split": {"mode": "random", "n_samples": 100, "train_fraction": 0.8},
+        "output": {"directory": "output/example"},
     })
-    for name, value in DEFAULTS.items():
-        properties[name]["default"] = value
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Composite-KRR resolved run configuration",
-        "type": "object",
-        "additionalProperties": False,
-        "required": sorted(REQUIRED_FIELDS),
-        "properties": properties,
-    }
-
-
-def template() -> dict[str, Any]:
-    return {
-        "SEED": 1,
-        "X_PATHS": ["/absolute/path/descriptor.npy"],
-        "X_NAMES": ["descriptor"],
-        "X_NORMS": ["standard"],
-        "Y_PATH": "/absolute/path/target.npy",
-        "Y_NAME": "target",
-        "Y_NORM": "standard",
-        "N_SAMPLES": 1000,
-        "TRAIN_VAL_SPLIT": 0.8,
-        "KRR_KERNEL": "rbf",
-        "KRR_KERNEL_PRODUCTS": [],
-        "OUTPUT_DIR": "/absolute/path/output",
-    }
-
-
-def _resolve_path(base: Path, value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    return path.resolve() if path.is_absolute() else (base / path).resolve()
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    payload = json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(payload)
-    os.replace(temporary, path)
+    if legacy:
+        values = config.values
+        values.pop("N_TRAIN", None)
+        values.update(KRR_KERNEL="rbf", X_PCA_COMPONENTS=None, X_PCA_WHITEN=False)
+        return values
+    return config.spec.model_dump(mode="json")

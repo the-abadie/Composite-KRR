@@ -16,10 +16,7 @@ from kernel_cache import extract_regressor
 from kernel_mixing import kernel_term_count
 from nystrom_cache import is_nystrom_distance_cache, nystrom_cache_to_pytorch
 from postprocess import bayesian_search_history
-from utilities import configure_logging
-from config import VERBOSITY
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("search")
 
 try:

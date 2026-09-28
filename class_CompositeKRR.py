@@ -6,12 +6,9 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.linalg import solve
 from sklearn.metrics.pairwise import pairwise_kernels
 
-from config import VERBOSITY
 from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters
 from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
-from utilities import configure_logging
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("class_CompositeKRR")
 
 

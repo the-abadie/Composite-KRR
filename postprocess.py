@@ -7,12 +7,9 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.model_selection import RandomizedSearchCV
 from target_utils import align_targets_for_scoring, as_target_matrix
-from utilities import configure_logging
-from config import VERBOSITY
 import logging
 import matplotlib.pyplot as plt
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("post-processing")
 
 def attach_random_search_history(search: RandomizedSearchCV, *, scoring) -> None:

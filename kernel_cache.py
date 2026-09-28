@@ -14,7 +14,6 @@ from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.metrics import get_scorer
 from threadpoolctl import threadpool_limits
 
-from config import VERBOSITY
 from kernels import (
     pairwise_cross_lp_distance,
     pairwise_cross_lp_distance_pytorch,
@@ -28,9 +27,7 @@ from target_utils import (
     as_target_matrix,
 )
 from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters, kernel_term_count
-from utilities import configure_logging
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("kernel-cache")
 _kernel_work_buffers = threading.local()
 

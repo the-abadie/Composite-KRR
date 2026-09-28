@@ -4,11 +4,8 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-import config
 from target_utils import as_target_matrix
-from utilities import configure_logging
 
-configure_logging(config.VERBOSITY)
 logger = logging.getLogger("preparation")
 
 
@@ -144,15 +141,6 @@ def validate_predefined_splits(
     if len(unique_indices) != len(all_indices):
         raise ValueError(
             "Predefined train, validation, and test indices must be unique and non-overlapping.")
-
-    if config.N_SAMPLES is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `N_SAMPLES` is not `None`. Config value will be ignored.")
-    if config.TRAIN_VAL_SPLIT is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `TRAIN_VAL_SPLIT` is not `None`. Config value will be ignored." )
-    if config.N_KFOLD is not None:
-        logger.warning(f"WARNING: You are using pre-defined splits but `N_KFOLD` is not `None`. Config value will be ignored." )
-    if config.STRATIFY:
-        logger.warning(f"WARNING: You are using pre-defined splits but `STRATIFY` is not `False`. Config value will be ignored.")
 
     logger.info(
         "Validated predefined splits: "

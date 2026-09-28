@@ -1,5 +1,4 @@
 import logging
-from config import VERBOSITY
 from pathlib import Path
 
 def configure_logging(verbosity: int, log_path=None) -> None:

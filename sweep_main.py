@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import ast
 import csv
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import shlex
+
+from run_config import KRRConfig, write_immutable
 
 
 # Edit these values.
-CONFIG_FILE = "config.py"
+CONFIG_FILE = Path(__file__).with_name("config.json")
+CONFIG_OUTPUT_DIR = "sweep_configs"
 
 N_TRAINS = [
     100,
@@ -34,7 +37,7 @@ TARGETS = [
     # {"name": "lumo", "path": "sample/QM9/lumo.npy"},
 ]
 
-RUN_COMMAND = ["uv", "run", "python", "main.py"]
+RUN_COMMAND = [sys.executable, str(Path(__file__).with_name("main.py"))]
 RUN_ENV = {
     # "CUDA_VISIBLE_DEVICES": "0,1,2,3",
 }
@@ -44,95 +47,54 @@ OUTPUT_ROOT = None  # Example: "sample/output/sweeps"
 RESULTS_CSV = "sweep_results.csv"
 
 CONTINUE_ON_ERROR = False
-RESTORE_CONFIG = True
 DRY_RUN = False
 
 
 def main() -> int:
-    config_path = Path(CONFIG_FILE)
-    original_config = config_path.read_text()
-    base_run_name = str(read_literal_assignment(original_config, "RUN_NAME", "sweep"))
+    base = KRRConfig.load(CONFIG_FILE)
     env = {**os.environ, **RUN_ENV}
-
     validate_settings()
     failures = []
     rows = []
     run_index = 0
-
-    try:
-        for n_train in N_TRAINS:
-            for target in TARGETS:
-                for seed in SEEDS:
-                    run_index += 1
-                    run_name = RUN_NAME_TEMPLATE.format(
-                        base_run_name=base_run_name,
-                        n_train=n_train,
-                        seed=seed,
-                        target_name=target["name"],
-                        target_slug=slugify(target["name"]),
-                        target_stem=Path(target["path"]).stem,
-                    )
-                    replacements = {
-                        "SEED": repr(seed),
-                        "N_TRAIN": repr(n_train),
-                        "Y_NAME": repr(target["name"]),
-                        "Y_PATH": repr(target["path"]),
-                        "RUN_NAME": repr(run_name),
-                        "TRAIN_VAL_SPLIT": "N_TRAIN/N_SAMPLES",
-                    }
-                    if OUTPUT_ROOT is not None:
-                        output_dir = Path(OUTPUT_ROOT) / str(seed) / run_name
-                        replacements["OUTPUT_DIR"] = repr(str(output_dir))
-
-                    print(
-                        f"[sweep] {run_index}: N_TRAIN={n_train} "
-                        f"target={target['name']!r} seed={seed}"
-                    )
-                    print(f"[sweep] RUN_NAME={run_name!r}")
-
-                    if DRY_RUN:
-                        print("[sweep] dry run; not editing config or running main.py")
-                        continue
-
-                    updated_config = replace_assignments(original_config, replacements)
-                    output_dir = evaluate_output_dir(updated_config)
-                    config_path.write_text(updated_config)
-                    result = subprocess.run(RUN_COMMAND, env=env)
-                    row = build_result_row(
-                        n_train=n_train,
-                        target=target,
-                        seed=seed,
-                        run_name=run_name,
-                        output_dir=output_dir,
-                        returncode=result.returncode,
-                    )
-                    rows.append(row)
-                    write_results_csv(rows)
-                    print(
-                        f"[sweep] metrics: MAE={row['mae']} RMSE={row['rmse']} "
-                        f"status={row['status']}"
-                    )
-
-                    if result.returncode != 0:
-                        failures.append((n_train, target["name"], seed, result.returncode))
-                        if not CONTINUE_ON_ERROR:
-                            return result.returncode
-    finally:
-        if RESTORE_CONFIG and not DRY_RUN:
-            config_path.write_text(original_config)
-            print(f"[sweep] restored {CONFIG_FILE}")
-
-    if failures:
-        for n_train, target_name, seed, returncode in failures:
-            print(
-                f"[sweep] failed: N_TRAIN={n_train} target={target_name!r} "
-                f"seed={seed} exit={returncode}",
-                file=sys.stderr,
-            )
-        return 1
-
-    print(f"[sweep] completed {run_index} run(s)")
-    return 0
+    for n_train in N_TRAINS:
+        for target in TARGETS:
+            for seed in SEEDS:
+                run_index += 1
+                run_name = RUN_NAME_TEMPLATE.format(
+                    base_run_name=base.spec.run_name, n_train=n_train, seed=seed,
+                    target_name=target["name"], target_slug=slugify(target["name"]),
+                    target_stem=Path(target["path"]).stem,
+                )
+                output_root = Path(OUTPUT_ROOT) if OUTPUT_ROOT else Path(base.spec.output.directory).parent
+                config = base.with_overrides({
+                    "seed": seed, "split.n_train": n_train, "target.name": target["name"],
+                    "target.path": target["path"], "run_name": run_name,
+                    "output.directory": str(output_root / str(seed) / run_name),
+                    "output.overwrite": False,
+                }).resolved()
+                config.validate(check_paths=not DRY_RUN)
+                config_path = Path(CONFIG_OUTPUT_DIR).resolve() / f"{slugify(run_name)}.json"
+                write_immutable(config_path, config.canonical_json())
+                command = [*RUN_COMMAND, "--config", str(config_path)]
+                print(f"[sweep] {run_index}: {shlex.join(command)}")
+                if DRY_RUN:
+                    continue
+                result = subprocess.run(command, env=env)
+                row = build_result_row(n_train=n_train, target=target, seed=seed,
+                    run_name=run_name, output_dir=Path(config.spec.output.directory),
+                    returncode=result.returncode)
+                rows.append(row)
+                write_results_csv(rows)
+                print(f"[sweep] metrics: MAE={row['mae']} RMSE={row['rmse']} status={row['status']}")
+                if result.returncode:
+                    failures.append((run_name, result.returncode))
+                    if not CONTINUE_ON_ERROR:
+                        return result.returncode
+    for run_name, returncode in failures:
+        print(f"[sweep] failed: {run_name} exit={returncode}", file=sys.stderr)
+    print(f"[sweep] prepared {run_index} run(s)" if DRY_RUN else f"[sweep] completed {run_index} run(s)")
+    return int(bool(failures))
 
 
 def validate_settings() -> None:
@@ -238,57 +200,6 @@ def write_results_csv(rows: list[dict[str, object]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-
-
-def evaluate_output_dir(config_text: str) -> Path | None:
-    namespace = {}
-    exec(compile(config_text, CONFIG_FILE, "exec"), namespace)
-    output_dir = namespace.get("OUTPUT_DIR")
-    if output_dir is None:
-        return None
-    return Path(output_dir)
-
-
-def replace_assignments(config_text: str, replacements: dict[str, str]) -> str:
-    spans = assignment_line_spans(config_text)
-    missing = sorted(name for name in replacements if name not in spans)
-    if missing:
-        raise SystemExit("Missing assignment(s) in config.py: " + ", ".join(missing))
-
-    lines = config_text.splitlines(keepends=True)
-    for name, value in sorted(
-        replacements.items(),
-        key=lambda item: spans[item[0]][0],
-        reverse=True,
-    ):
-        start_line, end_line = spans[name]
-        newline = "\n" if lines[end_line - 1].endswith("\n") else ""
-        lines[start_line - 1 : end_line] = [f"{name} = {value}{newline}"]
-    return "".join(lines)
-
-
-def assignment_line_spans(config_text: str) -> dict[str, tuple[int, int]]:
-    spans = {}
-    for node in ast.parse(config_text).body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        target = node.targets[0]
-        if isinstance(target, ast.Name):
-            spans[target.id] = (node.lineno, node.end_lineno or node.lineno)
-    return spans
-
-
-def read_literal_assignment(config_text: str, name: str, default):
-    for node in ast.parse(config_text).body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        target = node.targets[0]
-        if isinstance(target, ast.Name) and target.id == name:
-            try:
-                return ast.literal_eval(node.value)
-            except (SyntaxError, ValueError):
-                return default
-    return default
 
 
 def slugify(value: str) -> str:

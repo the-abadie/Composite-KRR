@@ -4,10 +4,7 @@ import numpy as np
 import logging
 from numpy.typing import NDArray
 
-from utilities import configure_logging
-from config import VERBOSITY
 from target_utils import as_target_array, as_target_matrix
-configure_logging(VERBOSITY)
 
 logger = logging.getLogger("class_Target")
 

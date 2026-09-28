@@ -12,15 +12,13 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 ## Additive and multiplicative kernels
 
 Each descriptor defines one base kernel with its own bandwidth (`gamma`) and
-RBF or Laplacian type. Set `KRR_KERNEL_PRODUCTS` to add elementwise (Hadamard)
-products of these kernels. Indices are **zero-based**, in `X_NAMES`/`X_PATHS`
-order. The default `[]` preserves additive-only behavior.
+RBF or Laplacian type. JSON `kernel_products` uses descriptor IDs, so reordering
+the descriptor list does not silently change the product definitions. The default
+`[]` preserves additive-only behavior. For four descriptors named `a`, `b`, `c`,
+and `d`, set:
 
-For four loaded descriptors, this JSON/TOML-compatible setting adds two products:
-
-```python
-KRR_KERNEL = ["rbf", "laplacian", "rbf", "laplacian"]
-KRR_KERNEL_PRODUCTS = [[0, 1], [2, 3]]
+```json
+"kernel_products": [["a", "b"], ["c", "d"]]
 ```
 
 The resulting kernel is
@@ -32,8 +30,8 @@ K = w0*K0 + w1*K1 + w2*K2 + w3*K3 + w4*(K0*K1) + w5*(K2*K3)
 Products use the **unweighted** base kernels. Their weights are independent of
 the additive weights: setting `w0 = 0` does not disable `K0*K1`. Factors reuse
 the base kernels' bandwidths, kernel types, and fold-fitted preprocessing.
-Products may have more than two factors (`[0, 1, 2]`) or repeated factors
-(`[0, 0]` for `K0**2`). Invalid indices, single-factor products, and duplicate
+Products may have more than two factors (`["a", "b", "c"]`) or repeated factors
+(`["a", "a"]` for `Ka**2`). Unknown descriptor IDs, single-factor products, and duplicate
 products (including reordered duplicates) are rejected.
 
 For direct Python use, both `CompositeKRREstimator` and
@@ -61,8 +59,8 @@ also removes every product containing it, and retained products are remapped
 to the subset's descriptor indices.
 
 Exact fitting, prediction, cached CV, and streamed Nyström support products on
-NumPy and optional PyTorch backends. Select `KRR_CACHED_SCORING_BACKEND =
-"pytorch"` and `KRR_PYTORCH_DEVICE = "cuda"` for GPU execution with a suitable
+NumPy and optional PyTorch backends. Select `execution.backend = "pytorch"` and
+`execution.torch.device = "cuda"` for GPU execution with a suitable
 Torch installation. Products need no additional descriptor loads or distance
 matrices. Each base kernel is exponentiated once per matrix assembly/candidate
 and reused; only factors needed by products are retained. This trades temporary
@@ -78,7 +76,7 @@ skipped when Torch is absent.
 Targets may be scalar or multi-output. A `.npy` target file can have shape
 `(n_samples,)`, `(n_samples, n_targets)`, or a higher-dimensional shape whose
 axes after the first sample axis are flattened into target columns. For `.npz`
-targets, `Y_NAME` may be one key containing a target vector/matrix, or a list of
+targets, `target.name` may be one key containing a target vector/matrix, or a list of
 keys whose target columns are concatenated.
 
 Multi-target runs use one shared composite input kernel and solve all target
@@ -92,22 +90,23 @@ Y_pred = K_eval @ dual_coef
 The CPU and PyTorch cached-scoring paths both use this matrix right-hand side.
 Search scores use sklearn's default multi-output aggregation for the selected
 metric, and held-out reporting logs aggregate MAE/RMSE plus per-target MAE/RMSE.
-When `STRATIFY = True`, multi-output targets are reduced to the first principal
+When `split.stratify = true`, multi-output targets are reduced to the first principal
 direction of standardized target columns for split stratification.
 
 ## Nyström backend
 
-Set `KRR_BACKEND = "nystrom"` in `config.py` to use an approximate streamed
+Set `model.backend` to `"nystrom"` in your JSON config to use an approximate streamed
 Nyström KRR backend instead of exact dense KRR. The exact backend remains the
 default.
 
 Important knobs:
 
-```python
-KRR_BACKEND = "nystrom"
-KRR_NYSTROM_N_LANDMARKS = 4096
-KRR_NYSTROM_BATCH_SIZE = 2048
-KRR_CACHED_SCORING_BACKEND = "numpy"  # or "pytorch" when torch is installed
+```json
+"model": {
+  "backend": "nystrom",
+  "nystrom": {"n_landmarks": 4096, "batch_size": 2048}
+},
+"execution": {"backend": "numpy"}
 ```
 
 The Nyström backend selects landmarks from each training fold, builds the small
@@ -117,57 +116,110 @@ validation-to-landmark, and landmark-to-landmark distances, so candidates reuse
 the same `O(Nm)` cache instead of refitting through sklearn. It avoids
 materializing the exact `N x N` training kernel.
 
-## Validated single-run configuration
+## JSON configuration and CLI
 
-`krr_cli.py` is the stable machine interface for one run. It accepts JSON or
-TOML, rejects unknown and inconsistent fields before launching `main.py`,
-resolves relative paths from the config file, and writes an immutable
-`resolved_config.json` with a stable SHA-256 into the output directory.
+Run a saved configuration directly:
 
 ```bash
-.venv/bin/python krr_cli.py template
-.venv/bin/python krr_cli.py schema
-.venv/bin/python krr_cli.py validate path/to/run.toml
-.venv/bin/python krr_cli.py run path/to/run.toml
+.venv/bin/python main.py --config /absolute/path/to/run.json
 ```
 
-TOML may place fields at the top level or under `[krr]`. The schema and template
-are intended for agents and editors, so scientific settings do not need to be
-duplicated as dozens of `argparse` flags. The sibling `../experiments/`
-repository owns study matrices, Newton/Stokes profiles, Slurm generation, and
-study-specific compatibility code. Do not add named-study runners or Slurm
-scripts here.
+Without `--config`, `main.py` reads the `config.json` beside the script. Importing
+`main` does not start a run. `config.py` is retained only as historical reference;
+editing it has no effect. Python configurations are never executed by the loader.
 
-## Sweeps
+A small complete configuration is:
 
-Use `sweep_main.py` to run `main.py` over `N_TRAIN`, target, and seed
-combinations without permanently editing `config.py`. Edit the constants at
-the top of the file:
-
-```python
-N_TRAINS = [1000, 5000, 10000]
-SEEDS = [1, 2, 3]
-TARGETS = [
-    {"name": "homo", "path": "sample/QM9/homo.npy"},
-    {"name": "lumo", "path": "sample/QM9/lumo.npy"},
-]
-RUN_COMMAND = [".venv-cu124/bin/python", "main.py"]
-RUN_ENV = {"CUDA_VISIBLE_DEVICES": "0,1,2,3"}
-RESULTS_CSV = "sweep_results.csv"
+```json
+{
+  "schema_version": 1,
+  "seed": 12,
+  "run_name": "mixed-kernels-n1000",
+  "descriptors": [
+    {"id": "overlap", "path": "../data/overlap.npy", "kernel": "rbf"},
+    {"id": "coulomb", "path": "../data/coulomb.npy", "kernel": "laplacian"}
+  ],
+  "target": {"path": "../data/energy.npy", "name": "energy"},
+  "kernel_products": [["overlap", "coulomb"]],
+  "split": {"mode": "random", "n_train": 1000, "n_folds": 5},
+  "execution": {"backend": "numpy", "n_jobs": 8, "distance_cache": {"n_jobs": 8}},
+  "output": {"directory": "../outputs/seed12"}
+}
 ```
 
-Then run:
+Defaults, strict types, validation, and generated JSON Schema have one source:
+`config_schema.py`. Unknown fields at every level, non-finite numbers, duplicate
+JSON keys, invalid bounds, and inconsistent product/split settings are rejected.
+Error locations identify the offending field. `krr_cli.py` provides agent tools:
 
 ```bash
-./sweep_main.py
+.venv/bin/python krr_cli.py template --output run.json
+.venv/bin/python krr_cli.py schema --output config.schema.json
+.venv/bin/python krr_cli.py validate run.json
+.venv/bin/python krr_cli.py validate run.json --no-check-paths
+.venv/bin/python krr_cli.py resolve run.json --set seed=123 \
+  --set split.n_train=2000 --set 'output.directory="../outputs/seed123"' \
+  --output configs/seed123.json
+.venv/bin/python main.py --config configs/seed123.json
 ```
 
-The script restores the original `config.py` when it exits if
-`RESTORE_CONFIG = True`. Set `DRY_RUN = True` to inspect generated runs without
-launching training. After each run, it writes the accumulated `N_TRAIN`, seed,
-target, output directory, return code, MAE, and RMSE rows to `RESULTS_CSV`.
+`resolve` expands defaults and writes a new immutable JSON file; rerunning with
+identical content is allowed, replacing different content is refused. Override
+values are JSON. Relative input **and output** paths resolve from the original
+configuration's directory, including overrides, independently of the shell's
+working directory. A resolved file uses absolute paths so moving it is safe.
+For cluster portability, paths may start with `@workspace/`, `@krr/`,
+`@experiments/`, or `@reports/`; `resolve --portable-workspace /path/to/ml-dev`
+retains workspace tokens in the saved file. No implicit environment-variable
+expansion or inheritance is performed.
 
-`run_n_train_sweep.sh` is also retained for the existing lightweight workflow
-that edits only `N_TRAIN` in `config.py`. It mutates that file and does not
-restore it, so prefer `sweep_main.py` for multi-axis local sweeps and the sibling
-experiment orchestrator for recorded cluster studies.
+Specify exactly one of `split.n_train` (training plus CV samples) and
+`split.train_fraction`. `split.n_samples` defaults to all available samples.
+An explicit sample pool larger than the dataset is an error. Setting either
+split field with `--set` clears the other inherited field. For predefined splits,
+use only `mode: "predefined"`, `train_indices`, `validation_folds`, and
+`test_indices`; validation folds may be an NPY array or NPZ with `fold0`, `fold1`,
+etc. Cross-field checks also validate bounds, kernel names, and descriptor IDs.
+
+Each run records `resolved_config.json` and `resolved_config.sha256`, including
+the actual random seed when `seed` was null. The output directory must be empty
+unless `output.overwrite` is true; a different resolved configuration is always
+refused. A `.run.lock` prevents simultaneous jobs writing the same directory.
+If a process is killed, confirm it has stopped before manually removing its lock.
+Use a distinct output directory for each independent job.
+
+TOML remains supported, including legacy `[krr]` wrappers. Existing flat uppercase
+JSON/TOML fields remain readable and can be migrated:
+
+```bash
+.venv/bin/python krr_cli.py migrate legacy.toml --output migrated.json
+```
+
+Legacy product indices are translated into descriptor names. Legacy `N_TRAIN`
+and `TRAIN_VAL_SPLIT` must agree when both are supplied; an inconsistent pair is
+an error. New configurations should use the structured schema. The Python API
+is `run_config.run(KRRConfig.load(path))`; no temporary Python config or global
+configuration mutation is involved.
+
+## Sweeps and HPC jobs
+
+Each Slurm job can invoke `main.py --config /path/to/its-run.json`. Keep scientific
+settings in these files and scheduler resources in the sibling `experiments/`
+repository. That repository owns study matrices, immutable expanded plans,
+Newton/Stokes profiles, Slurm rendering, preflight, and submission. It validates
+and freezes each KRR config before submission. Cluster submission still requires
+a fresh matching preflight and explicit confirmation.
+
+The retained local conveniences also generate independent configs:
+
+- `sweep_main.py`: edit `N_TRAINS`, `SEEDS`, `TARGETS`, and optional `OUTPUT_ROOT`.
+  Run with `.venv/bin/python sweep_main.py`. `DRY_RUN = True` writes configs and
+  prints commands without fitting. Files live in `CONFIG_OUTPUT_DIR`; local
+  summary metrics go to `RESULTS_CSV`.
+- `run_n_train_sweep.sh`: edit `N_TRAINS`; `RUN_AFTER_UPDATE=0` generates configs
+  without fitting. Override `CONFIG_FILE`, `CONFIG_OUTPUT_DIR`, or `KRR_PYTHON`
+  through environment variables as needed.
+
+Neither helper edits the base config. Saved predictions and local CSV summaries
+are not authoritative research records: completed studies must still use the
+reporting workflow under `reports/`.

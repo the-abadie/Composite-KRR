@@ -6,10 +6,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from config import VERBOSITY
-from utilities import configure_logging
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("pre-processing")
 
 

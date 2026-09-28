@@ -5,10 +5,7 @@ import logging
 import numpy as np
 from numpy.typing import NDArray
 
-from config import VERBOSITY
-from utilities import configure_logging
 
-configure_logging(VERBOSITY)
 logger = logging.getLogger("class_CompositeDescriptor")
 
 
