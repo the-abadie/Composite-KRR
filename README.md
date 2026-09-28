@@ -53,6 +53,27 @@ validation-to-landmark, and landmark-to-landmark distances, so candidates reuse
 the same `O(Nm)` cache instead of refitting through sklearn. It avoids
 materializing the exact `N x N` training kernel.
 
+## Validated single-run configuration
+
+`krr_cli.py` is the stable machine interface for one run. It accepts JSON or
+TOML, rejects unknown and inconsistent fields before launching `main.py`,
+resolves relative paths from the config file, and writes an immutable
+`resolved_config.json` with a stable SHA-256 into the output directory.
+
+```bash
+.venv/bin/python krr_cli.py template
+.venv/bin/python krr_cli.py schema
+.venv/bin/python krr_cli.py validate path/to/run.toml
+.venv/bin/python krr_cli.py run path/to/run.toml
+```
+
+TOML may place fields at the top level or under `[krr]`. The schema and template
+are intended for agents and editors, so scientific settings do not need to be
+duplicated as dozens of `argparse` flags. The sibling `../experiments/`
+repository owns study matrices, Newton/Stokes profiles, Slurm generation, and
+study-specific compatibility code. Do not add named-study runners or Slurm
+scripts here.
+
 ## Sweeps
 
 Use `sweep_main.py` to run `main.py` over `N_TRAIN`, target, and seed
@@ -81,3 +102,8 @@ The script restores the original `config.py` when it exits if
 `RESTORE_CONFIG = True`. Set `DRY_RUN = True` to inspect generated runs without
 launching training. After each run, it writes the accumulated `N_TRAIN`, seed,
 target, output directory, return code, MAE, and RMSE rows to `RESULTS_CSV`.
+
+`run_n_train_sweep.sh` is also retained for the existing lightweight workflow
+that edits only `N_TRAIN` in `config.py`. It mutates that file and does not
+restore it, so prefer `sweep_main.py` for multi-axis local sweeps and the sibling
+experiment orchestrator for recorded cluster studies.
