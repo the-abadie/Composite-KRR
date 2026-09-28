@@ -97,7 +97,7 @@ def resolve_torch_devices(
                     for index in range(device_count)
                 ]
             else:
-                resolved_devices = [torch.device("cpu")]
+                resolved_devices = [resolve_torch_device(torch, fallback_device)]
         else:
             raw_devices = [device.strip() for device in devices.split(",")]
             raw_devices = [device for device in raw_devices if device]

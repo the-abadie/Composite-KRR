@@ -61,7 +61,9 @@ to the subset's descriptor indices.
 Exact fitting, prediction, cached CV, and streamed Nyström support products on
 NumPy and optional PyTorch backends. Select `execution.backend = "pytorch"` and
 `execution.torch.device = "cuda"` for GPU execution with a suitable
-Torch installation. Products need no additional descriptor loads or distance
+Torch installation. An explicit `device = "cuda"` request fails if CUDA is
+unavailable, including when `devices = "auto"` selects the GPU list. Use
+`device = "auto"` to permit CPU fallback. Products need no additional descriptor loads or distance
 matrices. Each base kernel is exponentiated once per matrix assembly/candidate
 and reused; only factors needed by products are retained. This trades temporary
 kernel memory for reuse. Prediction/Nyström row batches and Torch candidate
