@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import os
@@ -159,6 +158,43 @@ class KRRConfigTests(unittest.TestCase):
             changed = saved.with_overrides({'output.overwrite': True, 'seed': 2})
             with self.assertRaises(FileExistsError):
                 run(changed)
+
+    def test_cli_resolve_and_migrate_freeze_portable_configs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / 'legacy.json'
+            base.write_text(json.dumps({"krr": template(legacy=True)}))
+            frozen = root / 'elsewhere/frozen.json'
+            command = [sys.executable, str(ROOT / 'krr_cli.py'), 'migrate', str(base),
+                       '--no-check-paths', '--set', 'split.n_train=12', '--output', str(frozen)]
+            for _ in range(2):
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            saved = KRRConfig.load(frozen)
+            self.assertEqual(saved.spec.split.n_train, 12)
+            self.assertEqual(saved.spec.descriptors[0].path, str(root / 'descriptor.npy'))
+            result = subprocess.run([*command, '--set', 'seed=7'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('Refusing to replace', result.stderr)
+
+    def test_predefined_npz_run_preserves_indices_and_multiple_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rng = np.random.default_rng(21)
+            for filename in ['a.npy', 'b.npy']:
+                np.save(root / filename, rng.normal(size=(20, 3)))
+            np.savez(root / 'target.npz', one=rng.normal(size=20), two=rng.normal(size=20))
+            np.save(root / 'train.npy', np.arange(6))
+            np.savez(root / 'folds.npz', fold0=np.arange(6, 8), fold1=np.arange(8, 10))
+            np.save(root / 'test.npy', np.arange(10, 20))
+            data = self.sample()
+            data['split'] = {'mode': 'predefined', 'train_indices': 'train.npy',
+                             'validation_folds': 'folds.npz', 'test_indices': 'test.npy'}
+            data['target'] = {'path': 'target.npz', 'name': ['one', 'two']}
+            result = run(KRRConfig.from_mapping(data, source_path=root / 'run.json'))
+            np.testing.assert_array_equal(np.load(result.output_dir / 'fold_val_idx.npy'), np.arange(10))
+            np.testing.assert_array_equal(np.load(result.output_dir / 'test_idx.npy'), np.arange(10, 20))
+            self.assertEqual(np.load(result.output_dir / 'y_predictions.npy').shape, (10, 2))
 
     def test_sequential_runs_restore_logging_and_seed_is_recorded(self):
         with tempfile.TemporaryDirectory() as temporary:

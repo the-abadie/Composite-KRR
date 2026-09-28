@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonnegativeInt = Annotated[StrictInt, Field(ge=0)]
@@ -173,6 +173,13 @@ class RunConfig(ConfigModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     output: OutputConfig
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("schema_version must be integer 1.")
+        return value
 
     @model_validator(mode="after")
     def consistent_run(self):

@@ -63,9 +63,6 @@ class KRRConfig:
             document = document["krr"]
         if any(key in ALLOWED_FIELDS for key in document):
             document = from_flat(document)
-        # Literal equality alone also accepts True and 1.0.
-        if "schema_version" in document and type(document["schema_version"]) is not int:
-            raise ValueError("schema_version must be integer 1.")
         return cls(RunConfig.model_validate(document), Path(source_path).resolve() if source_path else None)
 
     @classmethod
