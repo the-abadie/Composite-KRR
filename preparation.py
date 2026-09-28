@@ -105,7 +105,7 @@ def validate_predefined_splits(
     target_length: int,
 ) -> None:
     predef_idx_train = _validate_index_array(
-        "predefined training indices", predef_idx_train, allow_empty=False
+        "predefined training indices", predef_idx_train, allow_empty=True
     )
     predef_idx_test = _validate_index_array(
         "predefined testing indices", predef_idx_test, allow_empty=False
@@ -126,6 +126,9 @@ def validate_predefined_splits(
     N_PREDEF_TRAIN = len(predef_idx_train)
     N_PREDEF_VAL = sum(len(fold_idx) for fold_idx in validated_val_folds)
     N_PREDEF_TEST = len(predef_idx_test)
+
+    if N_PREDEF_TRAIN + N_PREDEF_VAL <= max(map(len, validated_val_folds)):
+        raise ValueError("Every predefined CV fold must leave training samples.")
 
     if N_PREDEF_TRAIN + N_PREDEF_VAL + N_PREDEF_TEST > target_length:
         raise ValueError("Number of pre-defined indices is greater than the target length. Please check your splits.")

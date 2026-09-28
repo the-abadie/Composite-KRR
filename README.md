@@ -182,6 +182,11 @@ split field with `--set` clears the other inherited field. For predefined splits
 use only `mode: "predefined"`, `train_indices`, `validation_folds`, and
 `test_indices`; validation folds may be an NPY array or NPZ with `fold0`, `fold1`,
 etc. Cross-field checks also validate bounds, kernel names, and descriptor IDs.
+These are global dataset indices. `train_indices` are always included in the
+training portion of each inner fold; they may be an empty integer array for
+ordinary K-fold CV in which every outer-training sample is validated once.
+Each validation fold must leave at least one training sample. All train,
+validation and held-out index groups must be disjoint.
 
 Each run records `resolved_config.json` and `resolved_config.sha256`, including
 the actual random seed when `seed` was null. The output directory must be empty
