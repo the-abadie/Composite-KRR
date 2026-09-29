@@ -177,8 +177,13 @@ configuration's directory, including overrides, independently of the shell's
 working directory. A resolved file uses absolute paths so moving it is safe.
 For cluster portability, paths may start with `@workspace/`, `@krr/`,
 `@experiments/`, or `@reports/`; `resolve --portable-workspace /path/to/ml-dev`
-retains workspace tokens in the saved file. No implicit environment-variable
-expansion or inheritance is performed.
+retains workspace tokens in the saved file. By default the workspace is the
+engine repository's parent directory. `KRR_WORKSPACE_ROOT` binds those tokens
+to a different runtime workspace; the experiment orchestrator sets it when
+running frozen engine source. An explicit `resolved(workspace=...)` argument
+takes precedence. Relative paths still resolve from the configuration file.
+Configuration strings do not expand arbitrary environment variables, and
+scientific settings are not inherited from the environment.
 
 Specify exactly one of `split.n_train` (training plus CV samples) and
 `split.train_fraction`. `split.n_samples` defaults to all available samples.

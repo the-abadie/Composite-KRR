@@ -39,6 +39,21 @@ class KRRConfigTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertFalse(schema["$defs"]["RandomSplit"]["additionalProperties"])
 
+    def test_workspace_binding_is_independent_of_engine_source_location(self):
+        data = self.sample()
+        data["descriptors"][0]["path"] = "@krr/sample/a.npy"
+        data["target"]["path"] = "@workspace/custom-inputs/target.npy"
+        data["output"]["directory"] = "@reports/output"
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with patch.dict(os.environ, {"KRR_WORKSPACE_ROOT": str(workspace)}):
+                config = KRRConfig.from_mapping(data).resolved()
+                self.assertEqual(config.spec.descriptors[0].path, str(workspace / "Composite-KRR/sample/a.npy"))
+                self.assertEqual(config.spec.target.path, str(workspace / "custom-inputs/target.npy"))
+                self.assertEqual(config.spec.output.directory, str(workspace / "reports/output"))
+                explicit = KRRConfig.from_mapping(data).resolved(workspace=workspace / "explicit")
+                self.assertEqual(explicit.spec.output.directory, str(workspace / "explicit/reports/output"))
+
     def test_rejects_invalid_structured_values(self):
         cases = [({"execution.n_jobs": 0}, "n_jobs"), ({"seed": True}, "seed"),
                  ({"split.n_train": "12"}, "n_train"), ({"split.n_train": 12.0}, "n_train"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +114,7 @@ class KRRConfig:
 
     def resolved(self, *, workspace=None):
         base = self.source_path.parent if self.source_path else Path.cwd()
+        workspace = workspace or os.environ.get("KRR_WORKSPACE_ROOT")
         workspace = Path(workspace).resolve() if workspace else Path(__file__).resolve().parent.parent
         roots = {"@workspace": workspace, "@krr": workspace / "Composite-KRR",
                  "@experiments": workspace / "experiments", "@reports": workspace / "reports"}
