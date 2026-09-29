@@ -458,12 +458,13 @@ def regression_error_summary(y_true: NDArray, y_pred: NDArray) -> dict:
     error = y_pred_matrix - y_true_matrix
     abs_error = np.abs(error)
     squared_error = error * error
+    target_rmse = np.sqrt(np.mean(squared_error, axis=0))
     return {
         "mae": float(np.mean(abs_error)),
         "mae_std": float(np.std(abs_error)),
-        "rmse": float(np.sqrt(np.mean(squared_error))),
+        "rmse": float(np.mean(target_rmse)),
         "target_mae": np.mean(abs_error, axis=0),
-        "target_rmse": np.sqrt(np.mean(squared_error, axis=0)),
+        "target_rmse": target_rmse,
     }
 
 

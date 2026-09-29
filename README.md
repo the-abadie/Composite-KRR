@@ -92,6 +92,11 @@ Y_pred = K_eval @ dual_coef
 The CPU and PyTorch cached-scoring paths both use this matrix right-hand side.
 Search scores use sklearn's default multi-output aggregation for the selected
 metric, and held-out reporting logs aggregate MAE/RMSE plus per-target MAE/RMSE.
+Aggregate RMSE is the arithmetic mean of the per-target RMSEs, matching
+`neg_root_mean_squared_error` during search. It is not the square root of a
+pooled MSE across targets. Scalar-target results are unchanged. Multi-target
+reports produced before this correction used the pooled definition; compare
+them only after recomputing RMSE from their saved predictions and true targets.
 When `split.stratify = true`, multi-output targets are reduced to the first principal
 direction of standardized target columns for split stratification.
 
