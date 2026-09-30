@@ -32,6 +32,7 @@ class TorchFoldDistanceCache:
     y_validation: NDArray
     y_validation_torch: Any
     target_transformer: object | None
+    baseline_validation: Any = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,8 @@ def _fold_distance_cache_to_pytorch(
             dtype=dtype,
         ),
         target_transformer=fold.target_transformer,
+        baseline_validation=None if fold.baseline_validation is None else as_torch_tensor(
+            fold.baseline_validation, torch=torch, device=device, dtype=dtype),
     )
 
 
@@ -827,6 +830,8 @@ def _inverse_transform_prediction_batch_pytorch(
     fold: TorchFoldDistanceCache,
     y_pred_batch,
 ):
+    if fold.baseline_validation is not None:
+        y_pred_batch = y_pred_batch + fold.baseline_validation
     return _inverse_transform_tensor_pytorch(fold.target_transformer, y_pred_batch)
 
 
@@ -902,6 +907,8 @@ def _inverse_transform_prediction_batch(
     fold: TorchFoldDistanceCache,
     y_pred_batch,
 ) -> list[NDArray]:
+    if fold.baseline_validation is not None:
+        y_pred_batch = y_pred_batch + fold.baseline_validation
     y_pred_np = y_pred_batch.detach().cpu().numpy()
     return [
         inverse_transform_target(fold.target_transformer, y_pred)

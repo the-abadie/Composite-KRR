@@ -27,6 +27,7 @@ from target_utils import (
     as_target_matrix,
 )
 from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters, kernel_term_count
+from linear_baseline import fit_linear_baseline, predict_linear_baseline
 
 logger = logging.getLogger("kernel-cache")
 _kernel_work_buffers = threading.local()
@@ -49,6 +50,7 @@ class FoldDistanceCache:
     y_train_transformed: NDArray
     y_validation: NDArray
     target_transformer: object | None
+    baseline_validation: NDArray | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class _FoldDistanceMetadata:
     y_train_transformed: NDArray
     y_validation: NDArray
     target_transformer: object | None
+    baseline_validation: NDArray | None = None
 
 
 @dataclass(frozen=True)
@@ -182,11 +185,15 @@ def build_distance_cache(
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
     kernel_products=None,
+    linear_baseline=None,
 ) -> DistanceCache:
     kernel_products = resolve_kernel_products(kernel_products, len(names))
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
+    if linear_baseline is not None and linear_baseline not in names:
+        raise ValueError("linear_baseline must name a descriptor block")
+    baseline_block = None if linear_baseline is None else X_blocks[names.index(linear_baseline)]
     y = as_target_array(y, dtype=dtype)
     if not 0 < memory_fraction <= 1:
         raise ValueError("memory_fraction must be in (0, 1].")
@@ -249,6 +256,7 @@ def build_distance_cache(
             y=y,
             target_transformer=target_transformer,
             dtype=dtype,
+            baseline_block=baseline_block,
         )
         for fold_id, (train_idx, validation_idx) in enumerate(
             fold_indices,
@@ -388,11 +396,17 @@ def build_fold_distance_metadata(
     y: NDArray,
     target_transformer,
     dtype: np.dtype,
+    baseline_block=None,
 ) -> _FoldDistanceMetadata:
     target_transformer_fold, y_train_transformed = fit_target_transformer(
         target_transformer,
         y[train_idx],
     )
+    baseline_validation = None
+    if baseline_block is not None:
+        fitted = fit_linear_baseline(baseline_block[train_idx], y_train_transformed)
+        y_train_transformed = y_train_transformed - predict_linear_baseline(baseline_block[train_idx], fitted)
+        baseline_validation = np.asarray(predict_linear_baseline(baseline_block[validation_idx], fitted), dtype=dtype)
 
     return _FoldDistanceMetadata(
         fold_id=fold_id,
@@ -401,6 +415,7 @@ def build_fold_distance_metadata(
         y_train_transformed=np.asarray(y_train_transformed, dtype=dtype),
         y_validation=np.asarray(y[validation_idx], dtype=dtype),
         target_transformer=target_transformer_fold,
+        baseline_validation=baseline_validation,
     )
 
 
@@ -511,6 +526,7 @@ def assemble_fold_distance_caches(
                 y_train_transformed=metadata.y_train_transformed,
                 y_validation=metadata.y_validation,
                 target_transformer=metadata.target_transformer,
+                baseline_validation=metadata.baseline_validation,
             )
         )
 
@@ -868,6 +884,8 @@ def predict_fold_from_distances(
         ),
     )
     y_pred_transformed = K_validation @ dual_coef
+    if fold.baseline_validation is not None:
+        y_pred_transformed = y_pred_transformed + fold.baseline_validation
     return inverse_transform_target(fold.target_transformer, y_pred_transformed)
 
 

@@ -79,6 +79,7 @@ class NystromConfig(ConfigModel):
 class ModelConfig(ConfigModel):
     backend: Literal["exact", "nystrom"] = "exact"
     nystrom: NystromConfig = Field(default_factory=NystromConfig)
+    linear_baseline: Text | None = Field(default=None, description="Descriptor ID for a fold-fitted affine baseline; exact KRR fits residuals.")
 
 
 class RandomSearchConfig(ConfigModel):
@@ -186,6 +187,13 @@ class RunConfig(ConfigModel):
         names = [descriptor.id for descriptor in self.descriptors]
         if len(set(names)) != len(names):
             raise ValueError("Descriptor ids must be unique.")
+        if self.model.linear_baseline is not None:
+            if self.model.linear_baseline not in names:
+                raise ValueError("model.linear_baseline must name a descriptor ID.")
+            if self.model.backend != "exact":
+                raise ValueError("model.linear_baseline currently requires exact KRR.")
+            if self.reporting.kernel_contributions:
+                raise ValueError("Kernel contribution ablations currently require model.linear_baseline=null.")
         seen = set()
         for factors in self.kernel_products:
             unknown = set(factors) - set(names)

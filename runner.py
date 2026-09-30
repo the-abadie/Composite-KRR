@@ -152,6 +152,7 @@ def _execute(spec):
         pytorch_predict_batch_size=spec.execution.torch.predict_batch_size,
         nystrom_batch_size=spec.model.nystrom.batch_size,
         nystrom_eigenvalue_floor=spec.model.nystrom.eigenvalue_floor,
+        linear_baseline=spec.model.linear_baseline,
     )
     estimator = TransformedTargetRegressor(
         regressor=base_estimator,

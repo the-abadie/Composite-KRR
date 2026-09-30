@@ -30,6 +30,7 @@ def make_composite_krr_regressor(
     pytorch_predict_batch_size: int = 2048,
     nystrom_batch_size: int = 2048,
     nystrom_eigenvalue_floor: float = 1e-12,
+    linear_baseline=None,
 ):
     backend = normalize_krr_backend(krr_backend)
     if backend == "exact":
@@ -45,8 +46,11 @@ def make_composite_krr_regressor(
             backend=nystrom_backend,
             pytorch_device=pytorch_device,
             pytorch_predict_batch_size=pytorch_predict_batch_size,
+            linear_baseline=linear_baseline,
         )
 
+    if linear_baseline is not None:
+        raise ValueError("Linear baseline currently requires exact KRR")
     return CompositeNystromKRREstimator(
         names=names,
         kernel_types=kernel_types,

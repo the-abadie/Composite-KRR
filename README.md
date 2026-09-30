@@ -73,6 +73,27 @@ Run the regression checks with `.venv/bin/python -m unittest discover -v`.
 The optional Torch parity test runs on CPU and also CUDA when available; it is
 skipped when Torch is absent.
 
+## Fold-fitted linear baseline
+
+Set `model.linear_baseline` to a descriptor ID (for example `"counts"`) to fit
+an affine baseline on that block and train exact KRR on its residuals. For
+molecular energies, an element-count block can represent a composition
+baseline with only a few features. The designated descriptor remains a base
+kernel too, with its weight tuned normally.
+
+The baseline uses the raw designated block and centered least squares with an
+intercept. It is fitted separately on each CV training fold, after that fold's
+target transformation. Validation predictions add its baseline before inverting
+the target transformation. The final model refits the baseline on the full
+outer-training pool. Held-out labels never enter either fit. NumPy, PyTorch,
+cached scoring, scalar targets, and multi-output targets use the same rule.
+
+The default `null` retains existing behavior. Nyström and kernel-contribution
+ablations currently reject non-null baselines. Completed runs preserve
+`linear_baseline_coefficients.npy` and `linear_baseline_intercept.npy`, in the
+transformed target units, with their checksums in `run_metrics.json`.
+The direct `CompositeKRREstimator` API accepts `linear_baseline="counts"` too.
+
 ## Multi-target learning
 
 Targets may be scalar or multi-output. A `.npy` target file can have shape

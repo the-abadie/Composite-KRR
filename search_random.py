@@ -45,6 +45,7 @@ from postprocess import (
 from preprocess import make_data_preprocessor
 from search_bayes import BayesianSearchResult, fit_bayesian_search
 from target_utils import as_target_array, as_target_matrix
+from linear_baseline import fit_linear_baseline, predict_linear_baseline
 
 logger = logging.getLogger("search")
 
@@ -333,6 +334,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         backend="numpy",
         pytorch_device: str | None = "auto",
         pytorch_predict_batch_size: int = 2048,
+        linear_baseline=None,
     ):
         self.alpha = alpha
         self.gammas = gammas
@@ -348,6 +350,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
         self.backend = backend
         self.pytorch_device = pytorch_device
         self.pytorch_predict_batch_size = pytorch_predict_batch_size
+        self.linear_baseline = linear_baseline
 
     def fit(self, X, y):
         compute_dtype = np.dtype(self.compute_dtype)
@@ -369,6 +372,14 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
             )
 
         names = self._resolve_sequence("names", self.names, n_blocks, "desc")
+        self.linear_baseline_ = None
+        if self.linear_baseline is not None:
+            if self.linear_baseline not in names:
+                raise ValueError("linear_baseline must name a descriptor block")
+            self.linear_baseline_index_ = names.index(self.linear_baseline)
+            self.linear_baseline_ = fit_linear_baseline(X_blocks[self.linear_baseline_index_], y_matrix)
+            residual = y_matrix - predict_linear_baseline(X_blocks[self.linear_baseline_index_], self.linear_baseline_)
+            y_array = residual[:, 0] if y_array.ndim == 1 else residual
         kernel_types = self._resolve_sequence(
             "kernel_types", self.kernel_types, n_blocks, "rbf"
         )
@@ -469,7 +480,11 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
             for preprocessor, X_block in zip(self.X_preprocessors_, X_blocks)
         ]
 
-        return self.model_.predict(X_blocks_t)
+        prediction = self.model_.predict(X_blocks_t)
+        if self.linear_baseline_ is not None:
+            baseline = predict_linear_baseline(X_blocks[self.linear_baseline_index_], self.linear_baseline_)
+            prediction = prediction + (baseline[:, 0] if prediction.ndim == 1 else baseline)
+        return prediction
 
     def _unpack_sample_matrix(self, X):
         X = np.asarray(X, dtype=object)
@@ -1619,6 +1634,7 @@ def _maybe_build_distance_cache(
             y,
             cv,
             names=names,
+            linear_baseline=getattr(regressor, "linear_baseline", None),
             kernel_products=getattr(regressor, "kernel_products", None),
             kernel_types=kernel_types,
             normalizations=normalizations,
