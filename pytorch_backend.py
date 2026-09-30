@@ -46,6 +46,7 @@ class TorchDistanceCache:
     device: Any
     dtype: Any
     kernel_products: tuple = ()
+    linear_baseline: str | None = None
 
     @property
     def n_components(self) -> int:
@@ -180,6 +181,7 @@ def distance_cache_to_pytorch(
         folds=folds,
         names=list(cache.names),
         kernel_products=cache.kernel_products,
+        linear_baseline=cache.linear_baseline,
         kernel_types=list(cache.kernel_types),
         normalizations=list(cache.normalizations),
         pca_components=list(cache.pca_components),

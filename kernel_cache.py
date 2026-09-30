@@ -85,6 +85,7 @@ class DistanceCache:
     memory_budget_nbytes: int | None
     n_jobs: int
     kernel_products: tuple = ()
+    linear_baseline: str | None = None
 
     @property
     def n_components(self) -> int:
@@ -379,6 +380,7 @@ def build_distance_cache(
         memory_budget_nbytes=memory_budget_nbytes,
         n_jobs=cache_n_jobs,
         kernel_products=kernel_products,
+        linear_baseline=linear_baseline,
     )
     logger.info(
         "Precomputed %s fold distance cache using %.2f MiB.",

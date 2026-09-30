@@ -66,6 +66,8 @@ def resolve_candidate_params(
         candidate.set_params(**params)
 
     regressor = extract_regressor(candidate)
+    if getattr(regressor, "linear_baseline", None) != getattr(cache, "linear_baseline", None):
+        raise ValueError("Candidate linear_baseline must match the distance cache.")
     products = resolve_kernel_products(getattr(regressor, "kernel_products", None), cache.n_components)
     if products != resolve_kernel_products(cache.kernel_products, cache.n_components):
         raise ValueError("Candidate kernel_products must match the distance cache layout.")

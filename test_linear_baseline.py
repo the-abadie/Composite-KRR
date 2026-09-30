@@ -80,6 +80,11 @@ class LinearBaselineTests(unittest.TestCase):
                    n_components=2, block_size=16, dtype="float64", n_jobs=1, memory_fraction=.8)
         self.assertIsNotNone(cache.folds[0].baseline_validation)
 
+    def test_cached_candidates_cannot_change_the_fitted_baseline(self):
+        with self.assertRaises(ValueError):
+            score_estimator_params_from_cache(self.estimator(), {"regressor__linear_baseline": None}, self.cache(self.y),
+                         scoring="neg_mean_absolute_error", backend="numpy", n_jobs=1)
+
     @unittest.skipUnless(importlib.util.find_spec("torch"), "Torch unavailable")
     def test_torch_cached_and_direct_predictions_match_numpy(self):
         import torch
