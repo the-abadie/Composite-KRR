@@ -247,6 +247,14 @@ configuration mutation is involved.
 
 ## Sweeps and HPC jobs
 
+`saved_model.SavedExactModel` evaluates saved exact-KRR dual coefficients without
+new fitting or hyperparameter search. It rebuilds descriptor and target transforms
+using the original training rows only. Callers must verify input/artifact hashes
+and reproduce the original saved held-out predictions before external evaluation.
+Scalar targets with no PCA or linear baseline are supported, including kernel
+products, on NumPy or PyTorch. This inference API does not start a new training run;
+new training runs still use `main.py --config` below.
+
 Each Slurm job can invoke `main.py --config /path/to/its-run.json`. Keep scientific
 settings in these files and scheduler resources in the sibling `experiments/`
 repository. That repository owns study matrices, immutable expanded plans,
