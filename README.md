@@ -180,7 +180,12 @@ order without gaps or overlaps. Stored arrays match the declared dtype and
 feature shape; virtual concatenation flattens and joins only the selected rows.
 Rows may be requested in any order, including repeated indices. The loader
 verifies each accessed part's SHA-256 and caches one decompressed part, shared
-across component views. It refuses implicit conversion of the full bank.
+across component views. Gathering multiple blocks from one manifest visits each
+selected part once, reads the union of required stored keys, and scatters rows
+back into the requested order. Component views and virtual concatenations share
+that traversal. Random training rows can still touch most parts of a bank;
+grouping avoids a separate archive traversal for each component. It refuses
+implicit conversion of the full bank.
 Keep shards small enough that one decompressed part fits in memory.
 
 `run_metrics.json` records the selected key, shape, dtype, manifest SHA-256,

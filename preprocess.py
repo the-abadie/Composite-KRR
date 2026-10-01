@@ -1,4 +1,5 @@
 from class_CompositeDescriptor import CompositeDescriptor
+from descriptor_storage import gather_descriptor_rows
 import logging
 
 import numpy as np
@@ -139,8 +140,8 @@ def descriptor_blocks_to_sample_matrix(
     indices = np.asarray(indices, dtype=int)
 
     X = np.empty((len(indices), len(descriptors.blocks)), dtype=object)
-    for block_idx, descriptor in enumerate(descriptors.blocks):
-        values = descriptor.values[indices]
+    values_by_block = gather_descriptor_rows([descriptor.values for descriptor in descriptors.blocks], indices)
+    for block_idx, values in enumerate(values_by_block):
         for sample_idx, value in enumerate(values):
             X[sample_idx, block_idx] = value
 

@@ -90,6 +90,8 @@ class ShardedDescriptorArray:
     def __init__(self, path, archive_key=None):
         self.path = Path(path).resolve()
         self.manifest = load_manifest(self.path)
+        stat = self.path.stat()
+        self.manifest_identity = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         arrays = self.manifest["arrays"]
         if archive_key is None:
             if len(arrays) != 1:
@@ -109,7 +111,7 @@ class ShardedDescriptorArray:
     def __len__(self):
         return self.shape[0]
 
-    def __getitem__(self, selection):
+    def _selection_rows(self, selection):
         scalar = np.isscalar(selection)
         if isinstance(selection, slice):
             rows = np.arange(*selection.indices(len(self)), dtype=np.int64)
@@ -125,29 +127,64 @@ class ShardedDescriptorArray:
             rows[rows < 0] += len(self)
             if np.any(rows < 0) or np.any(rows >= len(self)):
                 raise IndexError("Descriptor row index is out of range.")
-        out = np.empty((len(rows), *self.shape[1:]), dtype=self.dtype)
-        if len(rows):
-            part_ids = np.searchsorted(self.starts, rows, side="right") - 1
-            for part_id in np.unique(part_ids):
-                part = self.manifest["parts"][part_id]
-                path = Path(part["path"])
-                path = path if path.is_absolute() else self.path.parent / path
-                blocks = self.cache.read(path.resolve(), part["sha256"], self.source_keys)
-                for key, block in zip(self.source_keys, blocks):
-                    declared = self.manifest["arrays"][key]
-                    expected = (part["stop"] - part["start"], *declared["shape"][1:])
-                    if block.shape != expected or block.dtype != np.dtype(declared["dtype"]):
-                        raise ValueError(f"Descriptor shard array {key} differs from declared shape/dtype: {path}")
-                positions = np.flatnonzero(part_ids == part_id)
-                local = rows[positions] - part["start"]
-                if "source_keys" in self.manifest["arrays"][self.archive_key]:
-                    out[positions] = np.concatenate([block[local].reshape(len(local), -1) for block in blocks], axis=1)
-                else:
-                    out[positions] = blocks[0][local]
-        return out[0] if scalar else out
+        return rows, scalar
+
+    def __getitem__(self, selection):
+        return gather_sharded_rows([self], selection)[0]
 
     def __array__(self, dtype=None, copy=None):
         raise TypeError("Select descriptor rows explicitly; a complete sharded descriptor cannot be materialized implicitly.")
+
+
+def gather_sharded_rows(views, selection):
+    """Gather multiple views of one manifest with one visit per selected archive part."""
+    if not views:
+        return []
+    first = views[0]
+    if any(not isinstance(view, ShardedDescriptorArray)
+           or (view.path, view.manifest_identity) != (first.path, first.manifest_identity) for view in views):
+        raise ValueError("Grouped descriptor views must share one immutable manifest.")
+    rows, scalar = first._selection_rows(selection)
+    outputs = [np.empty((len(rows), *view.shape[1:]), dtype=view.dtype) for view in views]
+    keys = list(dict.fromkeys(key for view in views for key in view.source_keys))
+    if len(rows):
+        part_ids = np.searchsorted(first.starts, rows, side="right") - 1
+        for part_id in np.unique(part_ids):
+            part = first.manifest["parts"][part_id]
+            path = Path(part["path"])
+            path = path if path.is_absolute() else first.path.parent / path
+            loaded = first.cache.read(path.resolve(), part["sha256"], keys)
+            blocks = dict(zip(keys, loaded))
+            for key, block in blocks.items():
+                declared = first.manifest["arrays"][key]
+                expected = (part["stop"] - part["start"], *declared["shape"][1:])
+                if block.shape != expected or block.dtype != np.dtype(declared["dtype"]):
+                    raise ValueError(f"Descriptor shard array {key} differs from declared shape/dtype: {path}")
+            positions = np.flatnonzero(part_ids == part_id)
+            local = rows[positions] - part["start"]
+            for view, output in zip(views, outputs):
+                if "source_keys" in view.manifest["arrays"][view.archive_key]:
+                    output[positions] = np.concatenate([blocks[key][local].reshape(len(local), -1)
+                                                       for key in view.source_keys], axis=1)
+                else:
+                    output[positions] = blocks[view.archive_key][local]
+    return [output[0] if scalar else output for output in outputs]
+
+
+def gather_descriptor_rows(arrays, selection):
+    """Group sharded blocks by manifest while preserving block and requested row order."""
+    outputs = [None] * len(arrays)
+    groups = {}
+    for index, array in enumerate(arrays):
+        if isinstance(array, ShardedDescriptorArray):
+            groups.setdefault((array.path, array.manifest_identity), []).append(index)
+        else:
+            outputs[index] = array[selection]
+    for indices in groups.values():
+        gathered = gather_sharded_rows([arrays[index] for index in indices], selection)
+        for index, output in zip(indices, gathered):
+            outputs[index] = output
+    return outputs
 
 
 def load_descriptor_array(path, archive_key=None):
