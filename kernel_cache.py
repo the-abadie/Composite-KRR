@@ -791,7 +791,7 @@ def score_fold_from_distances(
         kernel_types=kernel_types,
         kernel_products=kernel_products,
     )
-    return score_predictions(fold.y_validation, y_pred, scoring)
+    return score_predictions(fold.y_validation, y_pred, scoring, target_transformer=fold.target_transformer)
 
 
 def score_fold_from_distances_pytorch(
@@ -1025,7 +1025,10 @@ def work_buffer_for(
     return buffer
 
 
-def score_predictions(y_true, y_pred, scoring) -> float:
+def score_predictions(y_true, y_pred, scoring, *, target_transformer=None) -> float:
+    from target_scoring import TransformedTargetScorer
+    if isinstance(scoring, TransformedTargetScorer):
+        return scoring.score_predictions(y_true, y_pred, target_transformer)
     if isinstance(scoring, str):
         scorer = get_scorer(scoring)
     else:

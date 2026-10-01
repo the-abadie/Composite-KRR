@@ -19,6 +19,7 @@ from utilities import configure_logging, time_dif
 from time import perf_counter
 from pathlib import Path
 from streaming_evaluation import predict_held_out, diagnostic_plot_sample
+from target_scoring import make_target_scorer
 
 def _execute(spec):
     time_0 = perf_counter()
@@ -159,11 +160,7 @@ def _execute(spec):
         transformer=preprocess.make_target_preprocessor(spec.target.normalization),
     )
 
-    scoring = (
-        "neg_root_mean_squared_error"
-        if spec.search.scoring == "rmse"
-        else spec.search.scoring
-    )
+    scoring = make_target_scorer(spec.search.scoring, spec.search.target_space)
     use_distance_cache = spec.execution.distance_cache.enabled
     if not spec.execution.distance_cache.enabled and krr_backend == "nystrom":
         logger.warning(
@@ -211,10 +208,10 @@ def _execute(spec):
     # 5) Postprocessing
     time_start_postprocessing:float = perf_counter()
     best_cv_score = search_result.best_score_
-    if scoring.startswith("neg_"):
+    if postprocess._is_negative_error_scorer(scoring):
         best_cv_score = -best_cv_score
 
-    logger.warning(f"Best CV {spec.search.scoring}: {best_cv_score:.6g}")
+    logger.warning(f"Best CV {spec.search.scoring} ({spec.search.target_space} target space): {best_cv_score:.6g}")
     logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
     if len(idx_test) > 0:
@@ -228,7 +225,7 @@ def _execute(spec):
             scoring=scoring,
             ddof=1)
 
-        logger.warning(f"Best Validation MAE across folds: {fold_mae:.6f} ± {fold_std:.6f}")
+        logger.warning(f"Best validation objective across folds ({spec.search.target_space} target space): {fold_mae:.6f} ± {fold_std:.6f}")
         logger.warning(f"Held-out test MAE : {test_summary['mae']:.6g}")
         logger.warning(f"Held-out test RMSE: {test_summary['rmse']:.6g}")
         if len(test_summary["target_mae"]) > 1:
@@ -361,6 +358,7 @@ def _execute(spec):
         spec, search_result, cv, idx_train_val, idx_test, y_train_val,
         test_summary, elapsed_seconds=time_f - time_0,
         training_seconds=time_end_training - time_start_training,
+        target_names=target.column_names,
     )
 
 

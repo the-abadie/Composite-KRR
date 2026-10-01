@@ -841,7 +841,7 @@ def _safe_score_fold_numpy(
             kernel_types=kernel_types,
             kernel_products=kernel_products,
         )
-        return score_predictions(fold.y_validation, y_pred, scoring)
+        return score_predictions(fold.y_validation, y_pred, scoring, target_transformer=fold.target_transformer)
     except np.linalg.LinAlgError:
         return np.nan
 
@@ -990,7 +990,7 @@ def _safe_score_fold_pytorch(
             kernel_types=kernel_types,
             kernel_products=kernel_products,
         )
-        return score_predictions(fold.y_validation, y_pred, scoring)
+        return score_predictions(fold.y_validation, y_pred, scoring, target_transformer=fold.target_transformer)
     except RuntimeError as exc:
         if _is_torch_linalg_error(exc):
             return np.nan

@@ -468,7 +468,7 @@ def score_fold_from_distances_pytorch(
         if isinstance(fold, FoldDistanceCache)
         else fold.y_validation
     )
-    return score_predictions(y_validation, y_pred, scoring)
+    return score_predictions(y_validation, y_pred, scoring, target_transformer=fold.target_transformer)
 
 
 def score_candidates_from_cache_pytorch(
@@ -702,7 +702,7 @@ def _score_candidate_batch_for_fold(
     y_pred_batch_np = _inverse_transform_prediction_batch(fold, y_pred_batch)
     return np.asarray(
         [
-            score_predictions(fold.y_validation, y_pred, scoring)
+            score_predictions(fold.y_validation, y_pred, scoring, target_transformer=fold.target_transformer)
             for y_pred in y_pred_batch_np
         ],
         dtype=float,
@@ -787,28 +787,40 @@ def _score_prediction_batch_pytorch(
     y_pred_batch,
     scoring,
 ):
-    if not isinstance(scoring, str):
+    from target_scoring import TransformedTargetScorer
+    transformed = isinstance(scoring, TransformedTargetScorer)
+    if not isinstance(scoring, str) and not transformed:
         return None
 
     torch = require_torch()
-    y_pred = _inverse_transform_prediction_batch_pytorch(fold, y_pred_batch)
-    if y_pred is None:
-        return None
-
-    y_true = fold.y_validation_torch
+    if transformed:
+        name = scoring.name
+        y_pred = y_pred_batch
+        if fold.baseline_validation is not None:
+            y_pred = y_pred + fold.baseline_validation
+        if fold.target_transformer is None:
+            raise ValueError("Transformed target scoring requires a fold-fitted target transformer.")
+        transformed_true = fold.target_transformer.transform(as_target_matrix(fold.y_validation, dtype=float))
+        y_true = torch.as_tensor(transformed_true, dtype=y_pred.dtype, device=y_pred.device)
+    else:
+        name = scoring
+        y_pred = _inverse_transform_prediction_batch_pytorch(fold, y_pred_batch)
+        if y_pred is None:
+            return None
+        y_true = fold.y_validation_torch
     if y_true.ndim == 1:
         y_true = y_true.reshape(-1, 1)
     y_true = y_true.unsqueeze(0)
     diff = y_pred - y_true
 
-    if scoring == "neg_mean_absolute_error":
+    if name == "neg_mean_absolute_error":
         return -torch.mean(torch.abs(diff), dim=(1, 2))
-    if scoring == "neg_mean_squared_error":
+    if name == "neg_mean_squared_error":
         return -torch.mean(diff * diff, dim=(1, 2))
-    if scoring == "neg_root_mean_squared_error":
+    if name == "neg_root_mean_squared_error":
         per_target_mse = torch.mean(diff * diff, dim=1)
         return -torch.mean(torch.sqrt(per_target_mse), dim=1)
-    if scoring == "r2":
+    if name == "r2":
         ss_res = torch.sum(diff * diff, dim=1)
         y_centered = y_true - torch.mean(y_true, dim=1, keepdim=True)
         ss_tot = torch.sum(y_centered * y_centered, dim=1)

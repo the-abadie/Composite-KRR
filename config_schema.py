@@ -105,6 +105,7 @@ class SearchConfig(ConfigModel):
     top_k_min_candidates: PositiveInt = 5
     gamma_prior_max_samples: PositiveInt | None = 5000
     scoring: Text = "neg_mean_absolute_error"
+    target_space: Literal["original", "transformed"] = Field(default="original", description="Score in original units, or after the target transform fitted on each CV training fold.")
 
     @model_validator(mode="after")
     def increasing_bounds(self):

@@ -37,7 +37,7 @@ def json_value(value):
 
 
 def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
-                     test_summary, *, elapsed_seconds, training_seconds):
+                     test_summary, *, elapsed_seconds, training_seconds, target_names=None):
     from postprocess import best_validation_fold_errors
     from run_config import write_immutable
 
@@ -65,11 +65,17 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                             "peak_allocated_bytes": torch.cuda.max_memory_allocated(i)}
                            for i in range(torch.cuda.device_count())]
     blocks = [array_record(d.path, archive_key=d.archive_key) for d in spec.descriptors]
+    if target_names is None:
+        from class_Target import target_names as infer_target_names
+        target_names = infer_target_names(spec.target.name, y_train)
     report = {"complete": True, "seed": spec.seed, "n_train": len(idx_train),
               "n_test": len(idx_test), "features": sum(int(np.prod(b["shape"][1:])) for b in blocks),
-              "scoring": scoring, "best_score": float(search_result.best_score_),
+              "target_names": target_names, "n_targets": len(target_names),
+              "scoring": scoring, "scoring_target_space": spec.search.target_space,
+              "best_score": float(search_result.best_score_), "cv_objective_error": float(np.mean(errors)),
               "cv_fold_errors": errors.tolist(),
-              "cv_mae": float(np.mean(errors)) if scoring == "neg_mean_absolute_error" else None,
+              "cv_mae": float(np.mean(errors)) if scoring == "neg_mean_absolute_error" and spec.search.target_space == "original" else None,
+              "cv_transformed_mae": float(np.mean(errors)) if scoring == "neg_mean_absolute_error" and spec.search.target_space == "transformed" else None,
               "cv_fold_std": float(np.std(errors, ddof=1)) if len(errors) > 1 else None,
               **test_summary, "best_params": search_result.best_params_,
               "training_target_mean": np.mean(y_train, axis=0),

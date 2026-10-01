@@ -111,8 +111,24 @@ Y_pred = K_eval @ dual_coef
 ```
 
 The CPU and PyTorch cached-scoring paths both use this matrix right-hand side.
+Feature preprocessing and target transforms (including a separate standard
+scaling mean/scale for each target column) are fitted on each CV training fold.
 Search scores use sklearn's default multi-output aggregation for the selected
-metric, and held-out reporting logs aggregate MAE/RMSE plus per-target MAE/RMSE.
+metric. `search.target_space="original"` preserves scoring in original target
+units. `search.target_space="transformed"` scores after the target transform
+fitted on that fold's training rows, on cached NumPy/Torch and uncached sklearn
+paths. With `target.normalization="standard"` this gives equally weighted
+standardized per-target errors, so heterogeneous physical units do not dominate
+a shared-kernel multi-target objective. Neither validation nor test targets are
+used to fit those transformations.
+
+Held-out reporting always logs aggregate MAE/RMSE plus per-target MAE/RMSE in
+original units. `run_metrics.json` stores `target_names`, `n_targets`,
+`target_mae`, and `target_rmse` in identical column order. For NPY multi-output
+targets, `target.name` can be a list with one label per column; NPZ key labels
+are expanded when a key contains multiple columns. The metrics record the
+`scoring_target_space` and `cv_objective_error`; transformed MAE selection is
+stored as `cv_transformed_mae`, while `cv_mae` is reserved for original-unit MAE.
 Aggregate RMSE is the arithmetic mean of the per-target RMSEs, matching
 `neg_root_mean_squared_error` during search. It is not the square root of a
 pooled MSE across targets. Scalar-target results are unchanged. Multi-target

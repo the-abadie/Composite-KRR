@@ -430,7 +430,8 @@ def _add_stage_label(ax, stage_name: str, start: int, end: int) -> None:
 
 
 def _is_negative_error_scorer(scoring) -> bool:
-    return isinstance(scoring, str) and scoring.startswith("neg_")
+    return ((isinstance(scoring, str) and scoring.startswith("neg_"))
+            or getattr(scoring, "_sign", 1) == -1)
 
 
 def runtime_analysis(start_end_list:list[tuple[float, float, str]]) -> None:

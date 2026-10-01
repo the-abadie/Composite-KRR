@@ -14,6 +14,7 @@ class Target:
     path:Path
     normalization:str
     data: NDArray | None = None
+    column_names: list[str] = field(default_factory=list, init=False)
 
     @property
     def n_samples(self) -> int:
@@ -28,6 +29,7 @@ class Target:
         y = np.load(path, mmap_mode="r")
         logger.info(f"Target {self.name} successfully loaded.")
         self.data = as_target_array(y)
+        self.column_names = target_names(self.name, self.data)
         return self.data
 
     def load_target_from_npz(self) -> NDArray:
@@ -37,6 +39,7 @@ class Target:
         with np.load(path) as npz:
             if isinstance(self.name, str):
                 y = npz[self.name]
+                self.column_names = target_names(self.name, y)
             else:
                 if not self.name:
                     raise ValueError(
@@ -46,7 +49,19 @@ class Target:
                     as_target_matrix(npz[target_name])
                     for target_name in self.name
                 ]
+                self.column_names = [label for name, block in zip(self.name, target_blocks)
+                                     for label in target_names(name, block)]
                 y = np.concatenate(target_blocks, axis=1)
         logger.info(f"Target {path} successfully loaded.")
         self.data = as_target_array(y)
         return self.data
+
+
+def target_names(name, y):
+    """Label original-unit target columns in their exact matrix order."""
+    count = as_target_matrix(y).shape[1]
+    if isinstance(name, list):
+        if len(name) != count:
+            raise ValueError(f"Target name list has {len(name)} names for {count} columns.")
+        return list(name)
+    return [name] if count == 1 else [f"{name}[{index}]" for index in range(count)]
