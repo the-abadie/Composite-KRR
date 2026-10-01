@@ -121,6 +121,23 @@ them only after recomputing RMSE from their saved predictions and true targets.
 When `split.stratify = true`, multi-output targets are reduced to the first principal
 direction of standardized target columns for split stratification.
 
+### Large held-out complements
+
+NPY descriptors and targets are loaded with read-only memory mapping. Only the
+training/CV pool is materialized during search. Final evaluation loads,
+preprocesses, and predicts at most `execution.prediction_batch_size` rows at a
+time (default 2048), on both NumPy and PyTorch. This outer row limit also bounds
+feature preprocessing, while `execution.torch.predict_batch_size` independently
+bounds Torch kernel construction. Exact training still uses dense matrices.
+
+Every held-out row is saved in `y_predictions.npy` and `y_true.npy`, in
+`test_idx.npy` order. MAE, RMSE, their per-target values, and absolute-error
+standard deviation are accumulated in float64 over the complete test set.
+Diagnostic scatter/histogram plots use at most `reporting.plot_max_samples`
+evenly spaced test rows (default 20000); sampled plots are labeled. The metric,
+prediction, and plot row counts are recorded in `run_metrics.json`. NPZ targets
+cannot be memory-mapped and are still loaded in memory.
+
 ## Nyström backend
 
 Set `model.backend` to `"nystrom"` in your JSON config to use an approximate streamed

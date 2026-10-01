@@ -44,7 +44,9 @@ class CompositeDescriptor:
             if path.suffix != ".npy":
                 raise ValueError(f"Descriptor path {path} is not .npy")
 
-            values = np.load(path)
+            # Keep large descriptors on disk; only selected training or prediction
+            # rows are materialized by the workflow.
+            values = np.load(path, mmap_mode="r")
             blocks.append(
                 DescriptorBlock(
                     name=name,

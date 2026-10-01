@@ -140,6 +140,7 @@ class ExecutionConfig(ConfigModel):
     dtype: Literal["float32", "float64"] = "float64"
     n_jobs: StrictInt | None = -1
     blas_threads: PositiveInt | None = 1
+    prediction_batch_size: PositiveInt = Field(default=2048, description="Held-out rows loaded, preprocessed, and predicted per batch, on either backend.")
     distance_cache: DistanceCacheConfig = Field(default_factory=DistanceCacheConfig)
     torch: TorchConfig = Field(default_factory=TorchConfig)
 
@@ -153,6 +154,7 @@ class ExecutionConfig(ConfigModel):
 class ReportingConfig(ConfigModel):
     kernel_contributions: bool = False
     contribution_bayesian_trials: NonnegativeInt | None = None
+    plot_max_samples: PositiveInt = Field(default=20000, description="Maximum held-out rows in diagnostic plots; full predictions and metrics are always saved.")
 
 
 class OutputConfig(ConfigModel):

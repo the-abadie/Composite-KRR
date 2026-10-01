@@ -25,7 +25,7 @@ class Target:
         path = Path(self.path)
         if path.suffix != ".npy":
             raise ValueError(f"Target Path {path} is not .npy")
-        y = np.load(path)
+        y = np.load(path, mmap_mode="r")
         logger.info(f"Target {self.name} successfully loaded.")
         self.data = as_target_array(y)
         return self.data

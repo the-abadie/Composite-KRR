@@ -547,7 +547,7 @@ def plot_random_search_validation_error(
 
 
 
-def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str) -> None:
+def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str, *, title_suffix="") -> None:
     y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
     y_true_flat = np.asarray(y_true_aligned, dtype=float).reshape(-1)
     y_pred_flat = np.asarray(y_pred_aligned, dtype=float).reshape(-1)
@@ -560,12 +560,12 @@ def plot_yy(y_pred:NDArray, y_true:NDArray, OUTPUT_DIR:str) -> None:
     ax.legend()
     ax.set_xlabel("True Target Value")
     ax.set_ylabel("CKRR Prediction")
-    ax.set_title("Target Values Versus CKRR Predictions")
+    ax.set_title("Target Values Versus CKRR Predictions" + title_suffix)
     fig.savefig(f"{OUTPUT_DIR}/plot-yy.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str):
+def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str, *, title_suffix=""):
     y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
     y_pred = np.asarray(y_pred_aligned, dtype=float).reshape(-1)
     y_true = np.asarray(y_true_aligned, dtype=float).reshape(-1)
@@ -604,7 +604,7 @@ def plot_error_histogram(y_pred: NDArray, y_true: NDArray, bins, OUTPUT_DIR:str)
     ax.axvline(0.0, color="red", linestyle=":", linewidth=1)
     ax.set_xlabel("Prediction Error (y_pred - y_true)")
     ax.set_ylabel("Density")
-    ax.set_title("Prediction Error Distribution")
+    ax.set_title("Prediction Error Distribution" + title_suffix)
     ax.legend()
     fig.tight_layout()
     fig.savefig(f"{OUTPUT_DIR}/plot-error_histogram.png", dpi=300, bbox_inches="tight")

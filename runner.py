@@ -18,6 +18,7 @@ from sklearn.model_selection import KFold, PredefinedSplit
 from utilities import configure_logging, time_dif
 from time import perf_counter
 from pathlib import Path
+from streaming_evaluation import predict_held_out, diagnostic_plot_sample
 
 def _execute(spec):
     time_0 = perf_counter()
@@ -127,8 +128,6 @@ def _execute(spec):
 
     X_train_val = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_train_val)
     y_train_val = target_data[idx_train_val]
-    X_test = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_test)
-    y_test = target_data[idx_test]
     kernel_types = [d.kernel for d in spec.descriptors]
     pca_components = [d.pca_components for d in spec.descriptors]
     pca_whiten = [d.pca_whiten for d in spec.descriptors]
@@ -218,9 +217,10 @@ def _execute(spec):
     logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
     if len(idx_test) > 0:
-        y_pred = search_result.best_estimator_.predict(X_test)
-
-        test_summary = postprocess.regression_error_summary(y_true=y_test, y_pred=y_pred)
+        y_pred, y_test, test_summary = predict_held_out(
+            search_result.best_estimator_, descriptors, target_data, idx_test,
+            spec.output.directory, batch_size=spec.execution.prediction_batch_size,
+        )
 
         fold_mae, fold_std = postprocess.best_validation_mae_and_fold_std(
             search_result=search_result,
@@ -241,8 +241,13 @@ def _execute(spec):
                 )
 
 
-        postprocess.plot_yy(y_pred=y_pred, y_true=y_test, OUTPUT_DIR=spec.output.directory)
-        postprocess.plot_error_histogram(y_pred=y_pred, y_true=y_test, bins=250, OUTPUT_DIR=spec.output.directory)
+        plot_true, plot_pred = diagnostic_plot_sample(
+            y_test, y_pred, max_samples=spec.reporting.plot_max_samples,
+        )
+        plot_label = (f" ({len(plot_true):,} of {len(y_test):,} held-out rows)"
+                      if len(plot_true) < len(y_test) else "")
+        postprocess.plot_yy(y_pred=plot_pred, y_true=plot_true, OUTPUT_DIR=spec.output.directory, title_suffix=plot_label)
+        postprocess.plot_error_histogram(y_pred=plot_pred, y_true=plot_true, bins=250, OUTPUT_DIR=spec.output.directory, title_suffix=plot_label)
 
         final = search_result.best_estimator_   # TransformedTargetRegressor
         reg = final.regressor_                  # fitted inner KRR estimator
@@ -257,8 +262,6 @@ def _execute(spec):
 
         np.save(file=f"{spec.output.directory}/fold_val_idx.npy", arr=idx_train_val)
         np.save(file=f"{spec.output.directory}/test_idx.npy", arr=idx_test)
-        np.save(file=f"{spec.output.directory}/y_predictions.npy", arr=y_pred)
-        np.save(file=f"{spec.output.directory}/y_true.npy", arr=y_test)
         np.save(file=f"{spec.output.directory}/gammas.npy", arr=search_result.best_params_["regressor__gammas"])
         np.save(file=f"{spec.output.directory}/kernel_weights.npy", arr=search_result.best_params_["regressor__kernel_weights"])
         np.save(file=f"{spec.output.directory}/alpha.npy", arr=search_result.best_params_["regressor__alpha"])
