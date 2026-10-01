@@ -37,9 +37,10 @@ def _execute(spec):
     # 1) Load Descriptor
     time_start_prepare_descriptor:float = perf_counter()
     descriptors = CompositeDescriptor(
-        names=names, paths=paths, normalizations=normalizations
+        names=names, paths=paths, normalizations=normalizations,
+        archive_keys=[d.archive_key for d in spec.descriptors],
     )
-    descriptors.load_descriptor_blocks_from_npy()
+    descriptors.load_descriptor_blocks()
     DESCRIPTOR_ORDER: int = len(descriptors.blocks)
     time_end_prepare_descriptor:float = perf_counter()
     time_log.info(f"Descriptor prepared in "

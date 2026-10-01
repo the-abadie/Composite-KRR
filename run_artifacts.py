@@ -10,10 +10,16 @@ from pathlib import Path
 import numpy as np
 
 
-def array_record(path):
+def array_record(path, *, archive_key=None):
     path = Path(path)
     with path.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    if path.suffix.lower() == ".json":
+        from descriptor_storage import ShardedDescriptorArray
+        data = ShardedDescriptorArray(path, archive_key)
+        return {"path": str(path), "sha256": digest, "shape": list(data.shape),
+                "dtype": str(data.dtype), "archive_key": data.archive_key,
+                "storage": "compressed_npz_shards", "manifest": data.manifest}
     data = np.load(path, mmap_mode="r")
     if isinstance(data, np.lib.npyio.NpzFile):
         data.close()
@@ -58,7 +64,7 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
         runtime["gpus"] = [{"index": i, "name": torch.cuda.get_device_name(i),
                             "peak_allocated_bytes": torch.cuda.max_memory_allocated(i)}
                            for i in range(torch.cuda.device_count())]
-    blocks = [array_record(d.path) for d in spec.descriptors]
+    blocks = [array_record(d.path, archive_key=d.archive_key) for d in spec.descriptors]
     report = {"complete": True, "seed": spec.seed, "n_train": len(idx_train),
               "n_test": len(idx_test), "features": sum(int(np.prod(b["shape"][1:])) for b in blocks),
               "scoring": scoring, "best_score": float(search_result.best_score_),

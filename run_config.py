@@ -157,7 +157,7 @@ class KRRConfig:
     def validate(self, *, check_paths=True):
         spec = self.resolved().spec
         if check_paths:
-            paths = [(d.path, {".npy"}) for d in spec.descriptors]
+            paths = [(d.path, {".npy", ".json"}) for d in spec.descriptors]
             paths.append((spec.target.path, {".npy", ".npz"}))
             if spec.split.mode == "predefined":
                 paths.extend([(spec.split.train_indices, {".npy"}),
@@ -169,6 +169,12 @@ class KRRConfig:
                     raise ValueError(f"Expected {sorted(extensions)} input: {path}")
                 if not path.is_file():
                     raise FileNotFoundError(f"Input file does not exist: {path}")
+            from descriptor_storage import load_descriptor_array
+            for descriptor in spec.descriptors:
+                if Path(descriptor.path).suffix.lower() == ".json":
+                    load_descriptor_array(descriptor.path, descriptor.archive_key)
+                elif descriptor.archive_key is not None:
+                    raise ValueError("descriptor.archive_key applies to JSON shard manifests only.")
         from sklearn.metrics import get_scorer
         get_scorer("neg_root_mean_squared_error" if spec.search.scoring == "rmse" else spec.search.scoring)
 

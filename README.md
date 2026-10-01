@@ -138,6 +138,42 @@ evenly spaced test rows (default 20000); sampled plots are labeled. The metric,
 prediction, and plot row counts are recorded in `run_metrics.json`. NPZ targets
 cannot be memory-mapped and are still loaded in memory.
 
+Compressed banks can use a JSON shard manifest as a descriptor `path`, with
+`archive_key` selecting a stored component or a virtual concatenation. All
+component kernels may reference the same manifest and NPZ parts, so no combined
+NPY or duplicate component banks are required. A manifest has this structure:
+
+```json
+{
+  "schema_version": 1,
+  "arrays": {
+    "component_0_data": {"shape": [10000, 80], "dtype": "float64"},
+    "component_1_data": {"shape": [10000, 120], "dtype": "float64"},
+    "combined": {"shape": [10000, 200], "dtype": "float64",
+                 "source_keys": ["component_0_data", "component_1_data"]}
+  },
+  "parts": [
+    {"path": "part-00000.npz", "start": 0, "stop": 10000,
+     "sha256": "<SHA-256 of these exact compressed archive bytes>"}
+  ]
+}
+```
+
+Part paths are relative to the manifest. Parts must cover the sample axis in
+order without gaps or overlaps. Stored arrays match the declared dtype and
+feature shape; virtual concatenation flattens and joins only the selected rows.
+Rows may be requested in any order, including repeated indices. The loader
+verifies each accessed part's SHA-256 and caches one decompressed part, shared
+across component views. It refuses implicit conversion of the full bank.
+Keep shards small enough that one decompressed part fits in memory.
+
+`run_metrics.json` records the selected key, shape, dtype, manifest SHA-256,
+and complete manifest including part checksums and any additional generation
+metadata. An original generator artifact record retained in `generated_record`
+describes the original generation archive, while a repacked component-only
+archive must have its own distinct `storage_record` and part SHA-256. These
+records must not claim that a repacked archive has the original bytes checksum.
+
 ## Nyström backend
 
 Set `model.backend` to `"nystrom"` in your JSON config to use an approximate streamed

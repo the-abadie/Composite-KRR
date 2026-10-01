@@ -22,7 +22,8 @@ class ConfigModel(BaseModel):
 
 class DescriptorConfig(ConfigModel):
     id: Text = Field(description="Unique descriptor name used by kernel_products.")
-    path: Text = Field(description="NPY file; relative paths are relative to this configuration file.")
+    path: Text = Field(description="NPY file or compressed-shard JSON manifest; relative paths are relative to this configuration file.")
+    archive_key: Text | None = Field(default=None, description="Array or virtual concatenation key in a descriptor shard manifest.")
     normalization: Literal["none", "passthrough", "standard", "log_standard"] = "standard"
     kernel: KernelType = "rbf"
     pca_components: PCAComponents = None
