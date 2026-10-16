@@ -20,6 +20,17 @@ class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, validate_default=True, allow_inf_nan=False)
 
 
+class SpatialDCTConfig(ConfigModel):
+    block_size: PositiveInt = Field(description="Spatial bins per contiguous channel before DCT-II.")
+    n_components: PositiveInt = Field(description="Retained orthonormal DCT-II modes per channel.")
+
+    @model_validator(mode="after")
+    def valid_width(self):
+        if self.n_components > self.block_size:
+            raise ValueError("spatial_dct.n_components cannot exceed block_size.")
+        return self
+
+
 class DescriptorConfig(ConfigModel):
     id: Text = Field(description="Unique descriptor name used by kernel_products.")
     path: Text = Field(description="NPY file or compressed-shard JSON manifest; relative paths are relative to this configuration file.")
@@ -28,6 +39,7 @@ class DescriptorConfig(ConfigModel):
     kernel: KernelType = "rbf"
     pca_components: PCAComponents = None
     pca_whiten: bool = False
+    spatial_dct: SpatialDCTConfig | None = Field(default=None, description="Fixed channel-wise DCT after fold-fitted normalization and before optional PCA; no subsequent scaling.")
 
 
 class TargetConfig(ConfigModel):

@@ -448,6 +448,7 @@ class CompositeKRREstimator(BaseEstimator, RegressorMixin):
                 dtype=compute_dtype,
             )
         self.model_.fit(X_blocks_t, y_array)
+        self.transformed_feature_counts_ = [int(b.shape[1]) for b in X_blocks_t]
         self.n_features_in_ = n_blocks
         self.names_ = names
         self.kernel_types_ = kernel_types

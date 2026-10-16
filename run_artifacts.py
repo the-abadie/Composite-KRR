@@ -91,6 +91,10 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                             ("fold_val_idx.npy", "test_idx.npy", "validation_folds.npz",
                              "y_predictions.npy", "y_true.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy")}}
     regressor = getattr(getattr(search_result, "best_estimator_", None), "regressor_", None)
+    transformed_counts = getattr(regressor, "transformed_feature_counts_", None)
+    if transformed_counts is not None:
+        report["kernel_features"] = sum(transformed_counts)
+        report["transformed_feature_counts"] = transformed_counts
     baseline = getattr(regressor, "linear_baseline_", None)
     if baseline is not None:
         report["linear_baseline"] = {"descriptor_id": spec.model.linear_baseline,

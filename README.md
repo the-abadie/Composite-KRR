@@ -293,6 +293,30 @@ ordinary K-fold CV in which every outer-training sample is validated once.
 Each validation fold must leave at least one training sample. All train,
 validation and held-out index groups must be disjoint.
 
+Descriptors can apply a fixed spatial DCT after fold-fitted normalization:
+
+```json
+{"id": "angular", "path": "angular.npy", "kernel": "rbf",
+ "normalization": "standard",
+ "spatial_dct": {"block_size": 600, "n_components": 32}}
+```
+
+The flattened input must contain consecutive channels of `block_size` bins.
+Each CV training fold fits its normalization on the original bins, applies
+orthonormal DCT-II independently to each channel, and keeps modes
+`0..n_components-1`. Validation and prediction reuse that fold's normalization;
+the final refit uses the full outer-training pool. No standardization follows
+the DCT. Optional PCA follows the spatial transform. Exact/Nyström caches,
+uncached estimators and saved exact inference use the same preprocessing recipe.
+With every mode retained, RBF distances are preserved relative to the same
+normalization without DCT. `spatial_dct` is structured-only; conversion to legacy
+fields is rejected rather than dropping this operation.
+
+`run_metrics.json` keeps `features` as the number of stored input features and
+also records `kernel_features` and `transformed_feature_counts` for fitted exact
+models. A fold-fitted reduction can require larger input arrays than its final
+kernel representation; keep these costs separate when reporting compression.
+
 Each run records `resolved_config.json` and `resolved_config.sha256`, including
 the actual random seed when `seed` was null. The output directory must be empty
 unless `output.overwrite` is true; a different resolved configuration is always

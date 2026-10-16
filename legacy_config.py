@@ -138,6 +138,8 @@ def from_flat(values: dict[str, Any]) -> dict[str, Any]:
 
 def to_flat(model: RunConfig) -> dict[str, Any]:
     """Compatibility view for existing Python clients; returns a fresh dictionary."""
+    if any(d.spatial_dct is not None for d in model.descriptors):
+        raise ValueError("spatial_dct requires structured configuration; legacy fields cannot represent it")
     document = model.model_dump(mode="json")
     values = {}
     for old, path in FIELDS.items():

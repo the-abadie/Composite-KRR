@@ -3,7 +3,7 @@ import numpy as np
 
 from class_CompositeKRR import CompositeKRR, KernelComponent
 from kernel_mixing import resolve_kernel_products
-from preprocess import make_data_preprocessor, make_target_preprocessor
+from preprocess import make_data_preprocessor, make_target_preprocessor, descriptor_preprocessing
 
 
 class SavedExactModel:
@@ -53,7 +53,7 @@ class SavedExactModel:
             block = np.asarray(block, dtype=self.dtype).reshape(len(y), -1)
             if not np.isfinite(block).all():
                 raise ValueError("Non-finite training descriptors")
-            transform = make_data_preprocessor(d.normalization)
+            transform = make_data_preprocessor(descriptor_preprocessing(d))
             self.train_blocks.append(np.asarray(transform.fit_transform(block), dtype=self.dtype))
             self.transforms.append(transform)
         self.target_transform = make_target_preprocessor(spec.target.normalization)
@@ -77,9 +77,12 @@ class SavedExactModel:
             if len(block) != n or not n:
                 raise ValueError("Evaluation blocks must have the same nonzero sample count")
             block = block.reshape(n, -1)
-            if block.shape[1] != train.shape[1] or not np.isfinite(block).all():
+            if not np.isfinite(block).all():
                 raise ValueError("Invalid evaluation descriptors")
-            transformed.append(np.asarray(transform.transform(block), dtype=self.dtype))
+            values = np.asarray(transform.transform(block), dtype=self.dtype)
+            if values.shape[1] != train.shape[1]:
+                raise ValueError("Invalid transformed evaluation descriptor width")
+            transformed.append(values)
         if self.backend == "numpy":
             pred = self.model._composite_kernel(transformed, self.train_blocks) @ self.coefficients
         else:

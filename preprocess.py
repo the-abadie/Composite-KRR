@@ -1,11 +1,15 @@
 from class_CompositeDescriptor import CompositeDescriptor
 from descriptor_storage import gather_descriptor_rows
 import logging
+from collections.abc import Mapping
 
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils.validation import check_is_fitted, validate_data
+from scipy.fft import dct
 
 
 logger = logging.getLogger("pre-processing")
@@ -13,6 +17,37 @@ logger = logging.getLogger("pre-processing")
 
 def _identity(x):
     return x
+
+
+class SpatialDCT(TransformerMixin, BaseEstimator):
+    """Orthogonal spatial transform for consecutive fixed-width channels."""
+
+    def __init__(self, *, block_size, n_components):
+        self.block_size = block_size
+        self.n_components = n_components
+
+    def fit(self, X, y=None):
+        if type(self.block_size) is not int or type(self.n_components) is not int or not 0 < self.n_components <= self.block_size:
+            raise ValueError("Spatial DCT requires 0 < n_components <= block_size integers")
+        X = validate_data(self, X, dtype=[np.float64, np.float32])
+        if X.shape[1] % self.block_size:
+            raise ValueError("Descriptor width must be a multiple of spatial_dct.block_size")
+        self.n_features_out_ = X.shape[1] // self.block_size * self.n_components
+        return self
+
+    def transform(self, X):
+        check_is_fitted(self, "n_features_out_")
+        X = validate_data(self, X, reset=False, dtype=[np.float64, np.float32])
+        channels = X.reshape(len(X), -1, self.block_size)
+        return dct(channels, type=2, norm="ortho", axis=-1)[..., :self.n_components].reshape(len(X), -1)
+
+
+def descriptor_preprocessing(descriptor):
+    """Keep legacy string recipes; carry structured operations through all caches."""
+    if descriptor.spatial_dct is None:
+        return descriptor.normalization
+    return {"normalization": descriptor.normalization,
+            "spatial_dct": descriptor.spatial_dct.model_dump(mode="json")}
 
 
 def make_target_preprocessor(transform: str):
@@ -60,12 +95,18 @@ def make_target_preprocessor(transform: str):
 
 
 def make_data_preprocessor(
-    transform: str,
+    transform: str | Mapping,
     pca_components=None,
     *,
     pca_whiten: bool = False,
 ):
     steps = []
+    spatial_dct = None
+    if isinstance(transform, Mapping):
+        if set(transform) != {"normalization", "spatial_dct"}:
+            raise ValueError("Unknown descriptor preprocessing recipe fields")
+        spatial_dct = transform["spatial_dct"]
+        transform = transform["normalization"]
 
     if transform == "none" or transform == "passthrough":
         # logger.debug("Data Preprocesor: none")
@@ -83,6 +124,9 @@ def make_data_preprocessor(
         steps.extend([("log1p", log1p), ("scaler", StandardScaler())])
     else:
         raise ValueError(f'Unknown data transform: "{transform}"')
+
+    if spatial_dct is not None:
+        steps.append(("spatial_dct", SpatialDCT(**spatial_dct)))
 
     if pca_components is not None:
         steps.append(
@@ -122,8 +166,9 @@ def transform_descriptors_for_split(descriptors:CompositeDescriptor, train_idx, 
         x_train_t = transformer.fit_transform(x_train_2d)
         x_eval_t = transformer.transform(x_eval_2d)
 
-        X_train_blocks.append(x_train_t.reshape((len(train_idx),) + descriptor_shape))
-        X_eval_blocks.append(x_eval_t.reshape((len(eval_idx),) + descriptor_shape))
+        shape = descriptor_shape if x_train_t.shape[1] == int(np.prod(descriptor_shape)) else (x_train_t.shape[1],)
+        X_train_blocks.append(x_train_t.reshape((len(train_idx),) + shape))
+        X_eval_blocks.append(x_eval_t.reshape((len(eval_idx),) + shape))
         preprocessors.append(transformer)
 
     return X_train_blocks, X_eval_blocks, preprocessors

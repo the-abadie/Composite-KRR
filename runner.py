@@ -27,7 +27,7 @@ def _execute(spec):
     time_log = logging.getLogger("timing")
     names = [d.id for d in spec.descriptors]
     paths = [d.path for d in spec.descriptors]
-    normalizations = [d.normalization for d in spec.descriptors]
+    normalizations = [preprocess.descriptor_preprocessing(d) for d in spec.descriptors]
     products = [[names.index(name) for name in factors] for factors in spec.kernel_products]
     predefined = spec.split.mode == "predefined"
     random.seed(spec.seed)
