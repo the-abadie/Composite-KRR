@@ -318,6 +318,11 @@ fields is rejected rather than dropping this operation.
 also records `kernel_features` and `transformed_feature_counts` for fitted exact
 models. A fold-fitted reduction can require larger input arrays than its final
 kernel representation; keep these costs separate when reporting compression.
+Exact distance-cache logs also record each fold/component's preprocessing seconds,
+including row gathering, fitted normalization and dimensional transforms, before
+distance computation. These task durations may overlap with multiple cache workers;
+their sum is not elapsed wall time. Native metrics record peak process RSS and
+Torch peak allocated GPU bytes separately.
 
 Each run records `resolved_config.json` and `resolved_config.sha256`, including
 the actual random seed when `seed` was null. The output directory must be empty

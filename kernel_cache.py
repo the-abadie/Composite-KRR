@@ -5,6 +5,7 @@ import platform
 import re
 import subprocess
 import threading
+from time import perf_counter
 
 from joblib import Parallel, delayed, effective_n_jobs
 import numpy as np
@@ -438,6 +439,7 @@ def build_component_fold_distance_cache(
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
 ) -> _ComponentFoldDistanceCache:
+    preprocessing_started = perf_counter()
     preprocessor = make_data_preprocessor(
         normalization,
         pca_components=pca_components,
@@ -445,6 +447,8 @@ def build_component_fold_distance_cache(
     )
     X_train = preprocessor.fit_transform(X_block[train_idx])
     X_validation = preprocessor.transform(X_block[validation_idx])
+    logger.info("Preprocessing fold=%s component=%s seconds=%.9f", fold_index,
+                component_index, perf_counter() - preprocessing_started)
 
     if normalize_distance_backend(distance_backend) == "pytorch":
         train_distance = pairwise_self_lp_distance_pytorch(
