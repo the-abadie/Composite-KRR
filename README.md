@@ -305,11 +305,13 @@ The flattened input must contain consecutive channels of `block_size` bins.
 Each CV training fold fits its normalization on the original bins, applies
 orthonormal DCT-II independently to each channel, and keeps modes
 `0..n_components-1`. Validation and prediction reuse that fold's normalization;
-the final refit uses the full outer-training pool. No standardization follows
-the DCT. Optional PCA follows the spatial transform. Exact/Nyström caches,
+the final refit uses the full outer-training pool. By default no standardization
+follows the DCT. Set `spatial_dct.post_normalization` to `"standard"` to fit a
+second scaler on the retained coefficients of that same training fold; validation
+and prediction reuse both fitted scalers. Optional PCA follows these operations. Exact/Nyström caches,
 uncached estimators and saved exact inference use the same preprocessing recipe.
-With every mode retained, RBF distances are preserved relative to the same
-normalization without DCT. `spatial_dct` is structured-only; conversion to legacy
+With every mode retained and post-normalization `"none"`, RBF distances are
+preserved relative to the same normalization without DCT. `spatial_dct` is structured-only; conversion to legacy
 fields is rejected rather than dropping this operation.
 
 `run_metrics.json` keeps `features` as the number of stored input features and

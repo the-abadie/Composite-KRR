@@ -72,6 +72,32 @@ class SpatialDCTTests(unittest.TestCase):
         np.testing.assert_allclose(saved.predict([self.x[16:]]), estimator.predict(samples(self.x[16:])), atol=2e-14)
         self.assertEqual(estimator.transformed_feature_counts_, [4])
 
+    def test_post_scaling_cache_and_inference_use_only_training_coefficients(self):
+        recipe = {**self.recipe, "spatial_dct": {**self.recipe["spatial_dct"], "post_normalization": "standard"}}
+        cv = KFold(3, shuffle=True, random_state=3)
+        cache = build_distance_cache(samples(self.x), self.rng.normal(size=24), cv,
+            names=["a"], kernel_types=["rbf"], normalizations=[recipe], n_jobs=1)
+        for fold, (train, val) in zip(cache.folds, cv.split(self.x), strict=True):
+            first = StandardScaler().fit(self.x[train])
+            def project(rows):
+                return dct(first.transform(self.x[rows]).reshape(len(rows), 2, 6),
+                    type=2, norm="ortho", axis=-1)[..., :2].reshape(len(rows), 4)
+            last = StandardScaler().fit(project(train))
+            a, b = last.transform(project(train)), last.transform(project(val))
+            np.testing.assert_allclose(fold.train_distances[0], cdist(a, a, "sqeuclidean"), atol=1e-12)
+            np.testing.assert_allclose(fold.validation_train_distances[0], cdist(b, a, "sqeuclidean"), atol=1e-12)
+        y = self.rng.normal(size=16)
+        estimator = CompositeKRREstimator(names=["a"], kernel_types=["rbf"], normalizations=[recipe],
+            compute_dtype="float64", gammas=[.2], kernel_weights=[1.], alpha=.1).fit(samples(self.x[:16]), y)
+        spec = KRRConfig.from_mapping({"descriptors": [{"id": "a", "path": "a.npy", **recipe}],
+            "target": {"path": "y.npy", "normalization": "none"}, "split": {"mode": "random", "n_train": 16},
+            "output": {"directory": "unused"}}).spec
+        saved = SavedExactModel(spec, [self.x[:16]], y, estimator.model_.dual_coef_, [.2], [1.], .1)
+        held = self.x[16:]+1000
+        np.testing.assert_allclose(saved.predict([held]), estimator.predict(samples(held)), atol=2e-14)
+        with self.assertRaises(ValueError):
+            DescriptorConfig(id="a", path="a.npy", spatial_dct={**recipe["spatial_dct"], "post_normalization": "whiten"})
+
     def test_invalid_widths_and_legacy_loss_are_rejected(self):
         for values in ({"block_size": 6, "n_components": 7}, {"block_size": True, "n_components": 2}):
             with self.assertRaises(ValueError):

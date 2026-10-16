@@ -47,7 +47,7 @@ def descriptor_preprocessing(descriptor):
     if descriptor.spatial_dct is None:
         return descriptor.normalization
     return {"normalization": descriptor.normalization,
-            "spatial_dct": descriptor.spatial_dct.model_dump(mode="json")}
+            "spatial_dct": descriptor.spatial_dct.model_dump(mode="json", exclude_defaults=True)}
 
 
 def make_target_preprocessor(transform: str):
@@ -126,7 +126,13 @@ def make_data_preprocessor(
         raise ValueError(f'Unknown data transform: "{transform}"')
 
     if spatial_dct is not None:
-        steps.append(("spatial_dct", SpatialDCT(**spatial_dct)))
+        dct_options = dict(spatial_dct)
+        post_normalization = dct_options.pop("post_normalization", "none")
+        if post_normalization not in ("none", "standard"):
+            raise ValueError(f"Unknown spatial DCT post-normalization: {post_normalization}")
+        steps.append(("spatial_dct", SpatialDCT(**dct_options)))
+        if post_normalization == "standard":
+            steps.append(("post_scaler", StandardScaler()))
 
     if pca_components is not None:
         steps.append(

@@ -23,6 +23,7 @@ class ConfigModel(BaseModel):
 class SpatialDCTConfig(ConfigModel):
     block_size: PositiveInt = Field(description="Spatial bins per contiguous channel before DCT-II.")
     n_components: PositiveInt = Field(description="Retained orthonormal DCT-II modes per channel.")
+    post_normalization: Literal["none", "standard"] = Field(default="none", description="Optional training-fold coefficient standardization after DCT truncation.")
 
     @model_validator(mode="after")
     def valid_width(self):
@@ -39,7 +40,7 @@ class DescriptorConfig(ConfigModel):
     kernel: KernelType = "rbf"
     pca_components: PCAComponents = None
     pca_whiten: bool = False
-    spatial_dct: SpatialDCTConfig | None = Field(default=None, description="Fixed channel-wise DCT after fold-fitted normalization and before optional PCA; no subsequent scaling.")
+    spatial_dct: SpatialDCTConfig | None = Field(default=None, description="Fixed channel-wise DCT after fold-fitted normalization, optional fold-fitted coefficient scaling, then optional PCA.")
 
 
 class TargetConfig(ConfigModel):
