@@ -332,6 +332,13 @@ artifact hashes, and runtime/GPU metadata. `validation_folds.npz` preserves
 global training and validation indices for every CV fold. These engine artifacts
 are the evidence for downstream authoritative reporting under `reports/`.
 
+For CUDA timing studies, set `execution.torch.warmup_size` (for example 512).
+The run warms distance, Gaussian-kernel, Cholesky and solve operations in its
+own process and configured precision, synchronizes, then starts the training
+timer. Deterministic inputs preserve random state. `run_metrics.json` records
+warm-up separately and exposes search-stage durations; total elapsed time still
+includes warm-up. The default zero preserves runs without explicit warm-up.
+
 TOML remains supported, including legacy `[krr]` wrappers. Existing flat uppercase
 JSON/TOML fields remain readable and can be migrated:
 

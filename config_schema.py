@@ -148,6 +148,7 @@ class TorchConfig(ConfigModel):
     devices: Text | Annotated[list[Text], Field(min_length=1)] | None = None
     candidate_batch_size: PositiveInt = 1
     predict_batch_size: PositiveInt = 2048
+    warmup_size: NonnegativeInt = Field(default=0, description="Optional deterministic matrix warm-up in this run's process, before the training timer; zero disables it.")
 
 
 class ExecutionConfig(ConfigModel):

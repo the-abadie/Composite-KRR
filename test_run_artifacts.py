@@ -27,12 +27,16 @@ class RunArtifactsTests(unittest.TestCase):
                     "output": {"directory": str(root)}}).spec
             search = SimpleNamespace(best_split_scores_=np.array([-1., -2., -3.]),
                                      best_score_=-2., best_params_={"alpha": np.float64(0.1)})
-            kwargs = dict(elapsed_seconds=2., training_seconds=1.)
+            kwargs = dict(elapsed_seconds=2., training_seconds=1.,
+                          warmup={"seconds": .2, "matrix_size": 512},
+                          stage_timings={"Random Stage 1": .5})
             save_run_metrics(spec, search, KFold(3), train, test, np.arange(6.),
                              {"mae": 0., "rmse": 0.}, **kwargs)
             metrics = json.loads((root / "run_metrics.json").read_text())
             self.assertEqual(metrics["cv_mae"], 2.)
             self.assertEqual(metrics["features"], 3)
+            self.assertEqual(metrics["warmup"]["seconds"], .2)
+            self.assertEqual(metrics["training_stage_seconds"], {"Random Stage 1": .5})
             self.assertEqual(len(metrics["descriptor_blocks"][0]["sha256"]), 64)
             with np.load(root / "validation_folds.npz") as folds:
                 np.testing.assert_array_equal(folds["validation_0"], [6, 1])

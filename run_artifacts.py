@@ -37,7 +37,8 @@ def json_value(value):
 
 
 def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
-                     test_summary, *, elapsed_seconds, training_seconds, target_names=None):
+                     test_summary, *, elapsed_seconds, training_seconds, target_names=None,
+                     warmup=None, stage_timings=None):
     from postprocess import best_validation_fold_errors
     from run_config import write_immutable
 
@@ -81,6 +82,7 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
               "training_target_mean": np.mean(y_train, axis=0),
               "training_target_median": np.median(y_train, axis=0),
               "elapsed_seconds": elapsed_seconds, "training_seconds": training_seconds,
+              "warmup": warmup, "training_stage_seconds": stage_timings,
               "held_out_evaluation": {"prediction_batch_size": spec.execution.prediction_batch_size,
                                       "metric_rows": len(idx_test), "prediction_rows": len(idx_test),
                                       "plot_rows": min(len(idx_test), spec.reporting.plot_max_samples),

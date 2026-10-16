@@ -21,6 +21,41 @@ from pathlib import Path
 from streaming_evaluation import predict_held_out, diagnostic_plot_sample
 from target_scoring import make_target_scorer
 
+def warm_up_execution(execution):
+    """Initialize CUDA distance/solve operations without consuming random state."""
+    if execution.backend != "pytorch" or not execution.torch.warmup_size:
+        return {"seconds": 0.0, "devices": [], "matrix_size": 0}
+    from pytorch_backend import require_torch
+    torch = require_torch()
+    requested = execution.torch.devices or [execution.torch.device or "auto"]
+    if requested == "auto":
+        requested = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+    elif isinstance(requested, str):
+        requested = [requested]
+    devices = []
+    for name in requested:
+        if name == "auto":
+            name = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = torch.device(name)
+        if device.type == "cuda" and str(device) not in devices:
+            devices.append(str(device))
+    for device in devices:
+        torch.cuda.synchronize(device)
+    started = perf_counter()
+    size = execution.torch.warmup_size
+    dtype = getattr(torch, execution.dtype)
+    with torch.no_grad():
+        for device in devices:
+            x = (torch.arange(size * 32, dtype=dtype, device=device).reshape(size, 32) % 17) / 17
+            distances = torch.cdist(x, x).square()
+            kernel = torch.exp(-distances) + torch.eye(size, dtype=dtype, device=device)
+            factor = torch.linalg.cholesky(kernel)
+            solution = torch.cholesky_solve(torch.ones((size, 1), dtype=dtype, device=device), factor)
+            _ = kernel @ solution
+            torch.cuda.synchronize(device)
+    return {"seconds": perf_counter() - started, "devices": devices, "matrix_size": size,
+            "dtype": execution.dtype, "random_state_consumed": False}
+
 def _execute(spec):
     time_0 = perf_counter()
     logger = logging.getLogger("CKRR")
@@ -126,6 +161,8 @@ def _execute(spec):
     time_log.debug(f"Splits prepared in {time_dif(time_start_prepare_splits, time_end_prepare_splits)}.")
 
     # 4) Begin Training
+    warmup = warm_up_execution(spec.execution)
+    time_log.info("Execution warm-up: %s", warmup)
     time_start_training:float = perf_counter()
 
     X_train_val = preprocess.descriptor_blocks_to_sample_matrix(descriptors, idx_train_val)
@@ -359,6 +396,8 @@ def _execute(spec):
         test_summary, elapsed_seconds=time_f - time_0,
         training_seconds=time_end_training - time_start_training,
         target_names=target.column_names,
+        warmup=warmup,
+        stage_timings={label: end - start for start, end, label in training_timings},
     )
 
 
