@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from config_schema import RunConfig
+from config_schema import KernelAlignmentConfig, RunConfig
 
 # Only field names are mapped here; defaults and validation belong to RunConfig.
 FIELDS = {
@@ -138,6 +138,8 @@ def from_flat(values: dict[str, Any]) -> dict[str, Any]:
 
 def to_flat(model: RunConfig) -> dict[str, Any]:
     """Compatibility view for existing Python clients; returns a fresh dictionary."""
+    if model.reporting.kernel_alignment != KernelAlignmentConfig():
+        raise ValueError("kernel_alignment requires structured configuration; legacy fields cannot represent it")
     if any(d.spatial_dct is not None for d in model.descriptors):
         raise ValueError("spatial_dct requires structured configuration; legacy fields cannot represent it")
     document = model.model_dump(mode="json")

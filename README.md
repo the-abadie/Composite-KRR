@@ -12,6 +12,102 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 
 ## Kernel alignment analysis
 
+Enable post-fit centered kernel alignment (CKA) in a structured run config:
+
+```json
+"reporting": {
+  "kernel_alignment": {
+    "enabled": true,
+    "max_samples": 1000,
+    "include_products": true
+  }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Generate diagnostics after the final refit, before held-out evaluation. |
+| `max_samples` | `1000` | Maximum training/CV rows, integer at least 3. Use all rows when the pool is smaller. |
+| `include_products` | `true` | Compare base kernels followed by configured product terms in saved weight order. Set `false` for base kernels only. |
+
+The same fields work in structured TOML under `[reporting.kernel_alignment]`,
+and appear in `krr_cli.py template` and `krr_cli.py schema`. For example:
+
+```bash
+.venv/bin/python krr_cli.py resolve run.json \
+  --set reporting.kernel_alignment.enabled=true \
+  --set reporting.kernel_alignment.max_samples=500 \
+  --set 'output.directory="../outputs/alignment-seed12"' \
+  --output configs/alignment-seed12.json
+.venv/bin/python main.py --config configs/alignment-seed12.json
+```
+
+This option is independent of `reporting.kernel_contributions`; it performs no
+additional model searches. Enabled or otherwise non-default alignment settings
+require structured configuration. Conversion to the uppercase legacy view is
+rejected instead of silently discarding them. The bundled `config.json` shows
+the disabled option; old configs that omit it also leave analysis disabled.
+
+For Gram matrices on the same rows, the statistic is:
+
+```text
+H = I - 11^T / n
+CKA(K_i, K_j) = <H K_i H, H K_j H>_F / (||H K_i H||_F ||H K_j H||_F)
+```
+
+The analysis uses only the outer-training/CV pool, never held-out descriptors or
+labels. A local RNG seeded with the recorded run seed samples uniformly without
+replacement and retains the original training-pool order. The final model's
+fitted normalization, spatial DCT, PCA, kernel types, and bandwidths are reused;
+the sampled subset does not refit any transform. Each term is **unweighted**,
+including terms whose fitted weight is zero. Products multiply unweighted base
+Gram matrices elementwise, including repeated factors, before centering. An
+affine linear baseline is not a separate kernel term.
+
+Diagnostics run on CPU for NumPy, PyTorch, exact, and Nyström models. Base kernels
+use the fitted descriptor precision; products and alignment calculations use
+float64. Nyström reports compare exact base/product kernels on the sampled rows,
+not their landmark approximation. With `s` sampled rows, `b` base kernels and `t`
+reported terms, temporary kernel storage is `O((b+t)*s^2)` and pairwise alignment
+work is `O(t^2*s^2)`, in addition to descriptor transforms and kernel construction.
+Increasing `max_samples` can substantially increase memory and runtime, including
+on GPU training jobs. Full Gram matrices are not saved.
+
+The output directory receives:
+
+| Artifact | Contents |
+|---|---|
+| `kernel_alignment.json` | Versioned report with the symmetric CKA matrix, term definitions, fitted weights and bandwidths, exact sampled global indices and local positions, precision, and diagnostic warnings. |
+| `kernel_alignment.csv` | Labeled square alignment matrix in the same term order. |
+| `kernel_alignment.png` | Heatmap, with undefined entries shown in gray. |
+| `kernel_alignment_sample_indices.npy` | Exact global dataset row indices in matrix order. |
+
+`run_metrics.json` includes an alignment summary and elapsed seconds, plus SHA-256
+records for all four artifacts. Timings are logged separately from final model
+evaluation. Alignment artifacts are diagnostics, not authoritative model result
+records; the workspace's `reports/` recording policy still applies to research runs.
+
+Nondegenerate positive-semidefinite kernels have CKA in `[0, 1]`, with 1 indicating
+proportional centered geometry on these rows. Symmetric indefinite kernels can
+produce negative values; the diagnostic does not perform a PSD test. A constant
+or zero kernel has undefined alignment: its row/column is JSON `null`, CSV blank,
+and gray in the plot, with a warning and `constant` term status. Numerically zero
+centered norms use a scale-relative `64 * float64 epsilon` tolerance. Fewer than
+three available rows produce an all-undefined report with `insufficient_samples`
+term statuses. Such reports have overall status `partial`.
+
+Reports warn about nearly constant kernels (centered/raw Frobenius norm ratio
+below `1e-8`) and nearly identity centered geometry (alignment with `H` above
+`1 - 1e-6`). These are numerical diagnostic thresholds, not redundancy cutoffs.
+Similarity depends on bandwidth, sample distribution, and sample count. This is
+a post-fit description at selected hyperparameters, not an independent estimate
+of predictive contribution. Use retrained individual/group CV ablations to
+establish whether terms can be removed; keep kernel selection within training/CV
+data and reserve held-out test data for final evaluation. No terms are pruned
+automatically. See [Cortes et al. (2012)](https://www.jmlr.org/papers/v13/cortes12a.html)
+and [Kornblith et al. (2019)](https://proceedings.mlr.press/v97/kornblith19a.html)
+for centered alignment and its interpretation.
+
 The Python API compares the unweighted kernel terms of a fitted exact or
 Nyström estimator (also accepted inside a fitted `TransformedTargetRegressor`):
 
@@ -274,6 +370,7 @@ A small complete configuration is:
   "kernel_products": [["overlap", "coulomb"]],
   "split": {"mode": "random", "n_train": 1000, "n_folds": 5},
   "execution": {"backend": "numpy", "n_jobs": 8, "distance_cache": {"n_jobs": 8}},
+  "reporting": {"kernel_alignment": {"enabled": true, "max_samples": 500}},
   "output": {"directory": "../outputs/seed12"}
 }
 ```
@@ -365,6 +462,8 @@ object, with CV fold errors, test metrics, best parameters, timings, input and
 artifact hashes, and runtime/GPU metadata. `validation_folds.npz` preserves
 global training and validation indices for every CV fold. These engine artifacts
 are the evidence for downstream authoritative reporting under `reports/`.
+Optional [kernel alignment reports](#kernel-alignment-analysis) add training-only
+CKA matrices, a heatmap, sampled row indices, and artifact checksums.
 
 For CUDA timing studies, set `execution.torch.warmup_size` (for example 512).
 The run warms distance, Gaussian-kernel, Cholesky and solve operations in its

@@ -251,6 +251,31 @@ def _execute(spec):
     logger.warning(f"Best CV {spec.search.scoring} ({spec.search.target_space} target space): {best_cv_score:.6g}")
     logger.debug(f"Best hyperparameters: {search_result.best_params_}")
 
+    kernel_alignment_summary = None
+    kernel_alignment_timings = []
+    if spec.reporting.kernel_alignment.enabled:
+        from kernel_alignment import analyze_kernel_alignment
+        alignment_start = perf_counter()
+        alignment = analyze_kernel_alignment(
+            search_result.best_estimator_, X_train_val,
+            sample_indices=idx_train_val,
+            max_samples=spec.reporting.kernel_alignment.max_samples,
+            include_products=spec.reporting.kernel_alignment.include_products,
+            random_state=spec.seed, output_dir=spec.output.directory,
+        )
+        alignment_end = perf_counter()
+        kernel_alignment_summary = {
+            key: alignment[key] for key in
+            ("method", "status", "n_available", "n_samples", "max_samples", "include_products", "weighted")
+        }
+        kernel_alignment_summary.update(
+            report_path="kernel_alignment.json", elapsed_seconds=alignment_end - alignment_start,
+        )
+        kernel_alignment_timings.append((alignment_start, alignment_end, "Post-Processing: Kernel Alignment"))
+        logger.warning("Kernel alignment: %d unweighted terms on %d/%d training/CV rows; status=%s",
+                       len(alignment["terms"]), alignment["n_samples"], alignment["n_available"], alignment["status"])
+
+    time_start_final_evaluation = perf_counter()
     if len(idx_test) > 0:
         y_pred, y_test, test_summary = predict_held_out(
             search_result.best_estimator_, descriptors, target_data, idx_test,
@@ -386,7 +411,10 @@ def _execute(spec):
         (time_0, time_end_initialization, "Initialization and Config Validation"),
         (time_start_prepare_descriptor, time_end_prepare_target, "Descriptor/Target Preparation"),
         *training_timings,
-        (time_start_postprocessing, time_end_postprocessing_plots, "Post-Processing: Final Model Evaluation"),
+        (time_start_postprocessing, alignment_start if kernel_alignment_timings else time_start_final_evaluation,
+         "Post-Processing: Search Summary"),
+        *kernel_alignment_timings,
+        (time_start_final_evaluation, time_end_postprocessing_plots, "Post-Processing: Final Model Evaluation"),
         *kernel_contribution_timings,
     ])
 
@@ -397,6 +425,7 @@ def _execute(spec):
         training_seconds=time_end_training - time_start_training,
         target_names=target.column_names,
         warmup=warmup,
+        kernel_alignment=kernel_alignment_summary,
         stage_timings={label: end - start for start, end, label in training_timings},
     )
 

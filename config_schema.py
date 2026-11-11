@@ -167,10 +167,17 @@ class ExecutionConfig(ConfigModel):
         return self
 
 
+class KernelAlignmentConfig(ConfigModel):
+    enabled: bool = Field(default=False, description="Report centered alignment of the final fitted model's unweighted kernel terms using training/CV rows only.")
+    max_samples: Annotated[StrictInt, Field(ge=3)] = Field(default=1000, description="Maximum uniformly sampled training/CV rows; sampled deterministically with the run seed. Kernel memory grows quadratically in this limit.")
+    include_products: bool = Field(default=True, description="Include configured elementwise product terms after the base kernels, including terms with zero fitted weight.")
+
+
 class ReportingConfig(ConfigModel):
     kernel_contributions: bool = False
     contribution_bayesian_trials: NonnegativeInt | None = None
     plot_max_samples: PositiveInt = Field(default=20000, description="Maximum held-out rows in diagnostic plots; full predictions and metrics are always saved.")
+    kernel_alignment: KernelAlignmentConfig = Field(default_factory=KernelAlignmentConfig)
 
 
 class OutputConfig(ConfigModel):

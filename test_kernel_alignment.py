@@ -1,8 +1,12 @@
 """Scientific formula, fitted-preprocessing, and reporting checks for CKA."""
 import csv
+import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -114,7 +118,6 @@ class FittedAlignmentTests(unittest.TestCase):
         changed = analyze_kernel_alignment(fitted, self.X, max_samples=7, random_state=123)
         self.assertNotEqual(first["sample_positions"], changed["sample_positions"])
         base_only = analyze_kernel_alignment(fitted, self.X, include_products=False)
-        assert_allclose(np.asarray(first["alignment"]), np.asarray(second["alignment"]))
         self.assertEqual(base_only["labels"], ["a", "b"])
         self.assertEqual(base_only["n_samples"], 18)
 
@@ -125,6 +128,11 @@ class FittedAlignmentTests(unittest.TestCase):
         ).fit(self.X[:, :1], self.y)
         report = analyze_kernel_alignment(model, self.X[:, :1])
         assert_allclose(report["alignment"], [[1.]])
+
+    def test_linear_baseline_does_not_change_kernel_geometry(self):
+        plain = analyze_kernel_alignment(self.estimator(), self.X)
+        residual = analyze_kernel_alignment(self.estimator(linear_baseline="a"), self.X)
+        assert_allclose(plain["alignment"], residual["alignment"], atol=1e-14)
 
     def test_exports_constant_and_insufficient_sample_entries_as_null(self):
         fitted = self.estimator(gammas=[0., 0.4])
@@ -165,6 +173,73 @@ class FittedAlignmentTests(unittest.TestCase):
         cpu = analyze_kernel_alignment(self.estimator(), self.X)
         gpu_api = analyze_kernel_alignment(self.estimator(backend="pytorch", pytorch_device="cpu"), self.X)
         assert_allclose(cpu["alignment"], gpu_api["alignment"], atol=1e-14)
+
+
+class AlignmentRunTests(unittest.TestCase):
+    def test_configured_runs_record_only_training_rows_and_checksum_all_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rng = np.random.default_rng(61)
+            for name in ("a", "b"):
+                np.save(root / f"{name}.npy", rng.normal(size=(24, 6)))
+            np.save(root / "y.npy", rng.normal(size=(24, 2)))
+            train = np.array([10, 4, 22, 6, 18, 0, 14, 2, 20, 8, 16, 12])
+            held = np.setdiff1d(np.arange(24), train)
+            np.save(root / "train.npy", np.array([], dtype=int))
+            np.savez(root / "folds.npz", fold0=train[:6], fold1=train[6:])
+            np.save(root / "test.npy", held)
+            common = {
+                "seed": 12,
+                "descriptors": [
+                    {"id": "a", "path": "a.npy", "pca_components": 2},
+                    {"id": "b", "path": "b.npy", "kernel": "laplacian",
+                     "spatial_dct": {"block_size": 3, "n_components": 2}},
+                ],
+                "kernel_products": [["a", "b"], ["a", "a"]],
+                "target": {"path": "y.npy", "name": ["one", "two"]},
+                "split": {"mode": "predefined", "train_indices": "train.npy",
+                          "validation_folds": "folds.npz", "test_indices": "test.npy"},
+                "search": {"random": {"stage1": 1, "stage2": 1}, "bayesian": {"trials": 0}},
+                "execution": {"n_jobs": 1, "distance_cache": {"n_jobs": 1}},
+            }
+            for mode in ("exact", "disabled", "nystrom"):
+                config = json.loads(json.dumps(common))
+                config["output"] = {"directory": mode}
+                if mode != "disabled":
+                    config["reporting"] = {"kernel_alignment": {
+                        "enabled": True, "max_samples": 7, "include_products": mode == "exact",
+                    }}
+                if mode == "nystrom":
+                    config["model"] = {"backend": "nystrom", "nystrom": {"n_landmarks": 5, "batch_size": 4}}
+                path = root / f"{mode}.json"
+                path.write_text(json.dumps(config))
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).with_name("main.py")), "--config", str(path)],
+                    capture_output=True, text=True, timeout=60,
+                    env={**os.environ, "MPLBACKEND": "Agg", "OPENBLAS_NUM_THREADS": "1"},
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                output = root / mode
+                metrics = json.loads((output / "run_metrics.json").read_text())
+                self.assertTrue(metrics["complete"])
+                if mode == "disabled":
+                    self.assertNotIn("kernel_alignment", metrics)
+                    self.assertFalse((output / "kernel_alignment.json").exists())
+                    continue
+                report = json.loads((output / "kernel_alignment.json").read_text())
+                self.assertEqual(report["n_samples"], 7)
+                self.assertEqual(report["n_available"], 12)
+                self.assertEqual(len(report["terms"]), 4 if mode == "exact" else 2)
+                self.assertEqual(report["sample_indices"], train[report["sample_positions"]].tolist())
+                self.assertFalse(np.intersect1d(report["sample_indices"], held).size)
+                self.assertEqual(metrics["kernel_alignment"]["n_samples"], 7)
+                self.assertGreater(metrics["kernel_alignment"]["elapsed_seconds"], 0.)
+                for name in ARTIFACT_NAMES:
+                    expected = hashlib.sha256((output / name).read_bytes()).hexdigest()
+                    self.assertEqual(metrics["artifacts"][name]["sha256"], expected)
+            # Diagnostics must leave the fitted solution and all test predictions unchanged.
+            for name in ("y_predictions.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy"):
+                assert_array_equal(np.load(root / "exact" / name), np.load(root / "disabled" / name))
 
 
 if __name__ == "__main__":

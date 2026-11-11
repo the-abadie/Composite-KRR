@@ -10,10 +10,17 @@ from pathlib import Path
 import numpy as np
 
 
-def array_record(path, *, archive_key=None):
+def file_record(path):
+    """Checksum a report or other artifact without interpreting its contents."""
     path = Path(path)
     with path.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    return {"path": str(path), "sha256": digest}
+
+
+def array_record(path, *, archive_key=None):
+    path = Path(path)
+    digest = file_record(path)["sha256"]
     if path.suffix.lower() == ".json":
         from descriptor_storage import ShardedDescriptorArray
         data = ShardedDescriptorArray(path, archive_key)
@@ -38,7 +45,7 @@ def json_value(value):
 
 def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                      test_summary, *, elapsed_seconds, training_seconds, target_names=None,
-                     warmup=None, stage_timings=None):
+                     warmup=None, stage_timings=None, kernel_alignment=None):
     from postprocess import best_validation_fold_errors
     from run_config import write_immutable
 
@@ -97,6 +104,12 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
     if transformed_counts is not None:
         report["kernel_features"] = sum(transformed_counts)
         report["transformed_feature_counts"] = transformed_counts
+    if kernel_alignment is not None:
+        from kernel_alignment import ARTIFACT_NAMES
+        report["kernel_alignment"] = kernel_alignment
+        for name in ARTIFACT_NAMES:
+            path = output / name
+            report["artifacts"][name] = array_record(path) if path.suffix == ".npy" else file_record(path)
     baseline = getattr(regressor, "linear_baseline_", None)
     if baseline is not None:
         report["linear_baseline"] = {"descriptor_id": spec.model.linear_baseline,

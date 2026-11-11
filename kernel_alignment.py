@@ -108,7 +108,7 @@ def analyze_kernel_alignment(
         "random_state": random_state, "sample_indices": indices[selected].tolist(),
         "sample_positions": selected.tolist(), "include_products": include_products,
         "weighted": False, "kernel_evaluation": "exact terms on CPU; fitted preprocessing and bandwidths",
-        "kernel_dtype": str(regressor.compute_dtype_), "alignment_dtype": "float64",
+        "kernel_dtype": str(regressor.compute_dtype_), "product_dtype": "float64", "alignment_dtype": "float64",
         "gammas": [float(gamma) for gamma in regressor.gammas_],
         "labels": labels, "terms": [], "warnings": [],
     }
@@ -186,6 +186,7 @@ def _write_artifacts(report, output_dir):
     size = min(20, max(5, 2 + len(report["labels"]) * 0.65))
     figure = Figure(figsize=(size, size), layout="constrained")
     FigureCanvasAgg(figure)
+    figure.suptitle("Centered kernel alignment", fontsize=14)
     axis = figure.subplots()
     values = np.array(report["alignment"], dtype=float)
     cmap = colormaps["viridis"].copy()
@@ -195,7 +196,7 @@ def _write_artifacts(report, output_dir):
     positions = np.arange(len(report["labels"]))
     axis.set_xticks(positions, report["labels"], rotation=45, ha="right")
     axis.set_yticks(positions, report["labels"])
-    axis.set_title(f"Centered kernel alignment — {report['n_samples']} training/CV rows\nUnweighted terms; gray = undefined")
+    axis.set_title(f"{report['n_samples']} training/CV rows; unweighted terms\nGray = undefined", fontsize=11)
     if len(positions) <= 15:
         for i, row in enumerate(report["alignment"]):
             for j, value in enumerate(row):

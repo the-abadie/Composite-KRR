@@ -44,7 +44,12 @@
   },
   "reporting": {
     "contribution_bayesian_trials": null,
-    "kernel_contributions": true
+    "kernel_contributions": true,
+    "kernel_alignment": {
+      "enabled": false,
+      "max_samples": 1000,
+      "include_products": true
+    }
   },
   "run_name": "QM7_OVERLAP_CONCAT_DCT_100_0.70frac",
   "schema_version": 1,
