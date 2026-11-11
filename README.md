@@ -8,6 +8,35 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Easy to add multiple descriptors and kernels
 - Multi-target learning with shared-kernel KRR/CKRR.
 - Config validation
+- Centered kernel alignment diagnostics for fitted base and product kernels.
+
+## Kernel alignment analysis
+
+The Python API compares the unweighted kernel terms of a fitted exact or
+Nyström estimator (also accepted inside a fitted `TransformedTargetRegressor`):
+
+```python
+from kernel_alignment import analyze_kernel_alignment, centered_kernel_alignment
+
+report = analyze_kernel_alignment(
+    fitted_estimator, X_train_val, sample_indices=global_training_indices,
+    max_samples=1000, include_products=True, random_state=12,
+    output_dir="output/alignment",
+)
+score = centered_kernel_alignment(K_a, K_b)
+```
+
+`X_train_val` is the same raw sample-by-descriptor object matrix accepted by the
+estimators. The analysis reuses fitted preprocessing and bandwidths without
+refitting. Supply only training/CV rows, with matching global sample indices;
+omitting indices uses local row positions. The returned JSON-compatible report
+contains the alignment matrix, term definitions, fitted weights, sample indices,
+and diagnostic warnings. It writes JSON, matrix CSV, PNG heatmap, and sampled
+indices when `output_dir` is provided. `centered_kernel_alignment` accepts two
+same-order square Gram matrices and returns `None` for zero centered norm.
+
+High alignment identifies similar geometry; use retrained CV ablations to
+establish whether a term can be removed for a particular prediction task.
 
 ## Additive and multiplicative kernels
 
