@@ -122,6 +122,27 @@ report = analyze_kernel_alignment(
 score = centered_kernel_alignment(K_a, K_b)
 ```
 
+For direct Python kernel–target analysis, pass matching training labels:
+
+```python
+report = analyze_kernel_alignment(
+    fitted_estimator, X_train_val, y=y_train_val, include_target=True,
+    target_space="original", target_names=["energy"],
+    sample_indices=global_training_indices, random_state=12,
+    output_dir="output/alignment",
+)
+```
+
+The `target_alignment` report contains one score per kernel term and target
+column, using the same sampled rows as the pairwise matrix. It compares each
+term with the centered linear target kernel `np.outer(y, y)`, without allocating that
+target Gram matrix. `target_space="transformed"` requires a fitted
+`TransformedTargetRegressor` and reuses its final target transformation without
+refitting. With an affine baseline, labels remain the full targets, not baseline
+residuals. Constant sampled targets have undefined scores. When an output
+directory is given, this also writes `kernel_target_alignment.csv` and
+`kernel_target_alignment.png`; the JSON section is inside `kernel_alignment.json`.
+
 `X_train_val` is the same raw sample-by-descriptor object matrix accepted by the
 estimators. The analysis reuses fitted preprocessing and bandwidths without
 refitting. Supply only training/CV rows, with matching global sample indices;

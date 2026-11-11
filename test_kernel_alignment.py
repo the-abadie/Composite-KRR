@@ -15,9 +15,10 @@ import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.metrics.pairwise import pairwise_kernels
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from kernel_alignment import ARTIFACT_NAMES, analyze_kernel_alignment, centered_kernel_alignment
+from kernel_alignment import (ARTIFACT_NAMES, TARGET_ARTIFACT_NAMES,
+                              analyze_kernel_alignment, centered_kernel_alignment)
 from nystrom_krr import CompositeNystromKRREstimator
 from search_random import CompositeKRREstimator
 
@@ -240,6 +241,103 @@ class AlignmentRunTests(unittest.TestCase):
             # Diagnostics must leave the fitted solution and all test predictions unchanged.
             for name in ("y_predictions.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy"):
                 assert_array_equal(np.load(root / "exact" / name), np.load(root / "disabled" / name))
+
+
+class KernelTargetAlignmentTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FittedAlignmentTests()
+        self.fixture.setUp()
+
+    def test_scalar_alignment_matches_explicit_outer_product_for_all_terms(self):
+        case = self.fixture
+        for kind in ("exact", "nystrom"):
+            model = case.estimator(kind)
+            report = analyze_kernel_alignment(model, case.X, y=case.y, include_target=True,
+                                             max_samples=7, random_state=9)
+            positions = report["sample_positions"]
+            blocks = [t.transform(block[positions]) for t, block in zip(model.X_preprocessors_, case.blocks)]
+            bases = [pairwise_kernels(block, metric=k, gamma=g, filter_params=True)
+                     for block, k, g in zip(blocks, model.kernel_types_, model.gammas_)]
+            terms = [*bases, bases[0] * bases[1], bases[0] ** 2]
+            target = np.outer(case.y[positions], case.y[positions])
+            expected = [[reference_alignment(kernel, target)] for kernel in terms]
+            assert_allclose(report["target_alignment"]["alignment"], expected, atol=1e-14)
+            self.assertEqual(report["target_alignment"]["target_names"], ["target"])
+            self.assertFalse(report["target_alignment"]["baseline_residualized"])
+            pairwise_only = analyze_kernel_alignment(model, case.X, max_samples=7, random_state=9)
+            self.assertEqual(report["alignment"], pairwise_only["alignment"])
+
+    def test_multiple_targets_are_separate_and_invariant_to_units_and_offsets(self):
+        case = self.fixture
+        y = np.column_stack((case.y, -5 * case.y + 20, np.ones(18)))
+        report = analyze_kernel_alignment(case.estimator(), case.X, y=y, include_target=True,
+                                         target_names=["energy", "rescaled", "constant"])
+        scores = np.array(report["target_alignment"]["alignment"], dtype=float)
+        assert_allclose(scores[:, 0], scores[:, 1], atol=1e-14)
+        self.assertTrue(np.isnan(scores[:, 2]).all())
+        self.assertEqual(report["target_alignment"]["targets"][2]["status"], "constant")
+        self.assertEqual(report["status"], "partial")
+        self.assertTrue(any("constant" in warning for warning in report["warnings"]))
+        # The entire pool varies; the deterministic sampled rows happen to be constant.
+        selected = analyze_kernel_alignment(case.estimator(), case.X, max_samples=3)["sample_positions"]
+        y = case.y.copy()
+        y[selected] = 1
+        report = analyze_kernel_alignment(case.estimator(), case.X, y=y, include_target=True, max_samples=3)
+        self.assertEqual(report["target_alignment"]["targets"][0]["status"], "constant")
+
+    def test_transformed_target_alignment_reuses_fitted_transform_without_refitting(self):
+        case = self.fixture
+        positive = np.exp(case.y / 5 + 1)
+        model = TransformedTargetRegressor(
+            regressor=CompositeKRREstimator(compute_dtype="float64", gammas=[0.2, 0.4]),
+            transformer=FunctionTransformer(np.log, np.exp),
+        ).fit(case.X, positive)
+        with patch.object(model.transformer_, "fit", side_effect=AssertionError("must not refit")):
+            transformed = analyze_kernel_alignment(model, case.X, y=positive, include_target=True,
+                                                   target_space="transformed")
+        expected = analyze_kernel_alignment(model, case.X, y=np.log(positive), include_target=True)
+        assert_allclose(transformed["target_alignment"]["alignment"], expected["target_alignment"]["alignment"], atol=1e-14)
+        original = analyze_kernel_alignment(model, case.X, y=positive, include_target=True)
+        self.assertGreater(np.max(np.abs(np.array(original["target_alignment"]["alignment"]) -
+                                        np.array(transformed["target_alignment"]["alignment"]))), 1e-4)
+        self.assertEqual(transformed["target_alignment"]["target_space"], "transformed")
+
+    def test_degenerate_kernels_tiny_pools_and_target_artifact_exports(self):
+        case = self.fixture
+        model = case.estimator(gammas=[0., 0.4])
+        with tempfile.TemporaryDirectory() as temporary:
+            report = analyze_kernel_alignment(model, case.X, y=case.y, include_target=True,
+                                             target_names="energy", output_dir=temporary)
+            self.assertIsNone(report["target_alignment"]["alignment"][0][0])
+            root = Path(temporary)
+            for name in (*ARTIFACT_NAMES, *TARGET_ARTIFACT_NAMES):
+                self.assertGreater((root / name).stat().st_size, 0)
+            saved = json.loads((root / "kernel_alignment.json").read_text())
+            self.assertEqual(saved, report)
+            with (root / "kernel_target_alignment.csv").open() as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows[0], ["kernel", "energy"])
+            self.assertEqual(rows[1], ["a", ""])
+            pairwise_only_dir = root / "pairwise_only"
+            disabled = analyze_kernel_alignment(model, case.X, output_dir=pairwise_only_dir)
+            self.assertNotIn("target_alignment", disabled)
+            self.assertFalse((pairwise_only_dir / TARGET_ARTIFACT_NAMES[0]).exists())
+        small = analyze_kernel_alignment(model, case.X[:2], y=case.y[:2], include_target=True)
+        self.assertEqual(small["target_alignment"]["targets"][0]["status"], "insufficient_samples")
+        self.assertTrue(all(row == [None] for row in small["target_alignment"]["alignment"]))
+
+    def test_invalid_target_requests_fail_clearly(self):
+        case = self.fixture
+        model = case.estimator()
+        for kwargs in ({}, {"y": np.ones(17)}, {"y": np.ones((18, 0))},
+                       {"y": case.y * np.nan}, {"y": case.y.astype(complex)},
+                       {"y": case.y, "target_names": ["one", "two"]},
+                       {"y": case.y, "target_names": [""]},
+                       {"y": case.y, "target_space": "transformed"},
+                       {"y": case.y, "target_space": "invalid"},
+                       {"y": case.y, "include_target": 1}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                analyze_kernel_alignment(model, case.X, **{"include_target": True, **kwargs})
 
 
 if __name__ == "__main__":
