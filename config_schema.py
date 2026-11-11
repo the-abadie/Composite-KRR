@@ -171,6 +171,14 @@ class KernelAlignmentConfig(ConfigModel):
     enabled: bool = Field(default=False, description="Report centered alignment of the final fitted model's unweighted kernel terms using training/CV rows only.")
     max_samples: Annotated[StrictInt, Field(ge=3)] = Field(default=1000, description="Maximum uniformly sampled training/CV rows; sampled deterministically with the run seed. Kernel memory grows quadratically in this limit.")
     include_products: bool = Field(default=True, description="Include configured elementwise product terms after the base kernels, including terms with zero fitted weight.")
+    include_target: bool = Field(default=False, description="Also report alignment with a linear target kernel for each target column on the same sampled training/CV rows. Requires enabled=true.")
+    target_space: Literal["original", "transformed"] = Field(default="original", description="Target labels in original units or after the final fitted target transformer; independent of search.target_space. No baseline residual subtraction.")
+
+    @model_validator(mode="after")
+    def target_requires_alignment(self):
+        if self.include_target and not self.enabled:
+            raise ValueError("kernel_alignment.include_target requires kernel_alignment.enabled=true.")
+        return self
 
 
 class ReportingConfig(ConfigModel):

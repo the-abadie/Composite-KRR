@@ -105,9 +105,10 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
         report["kernel_features"] = sum(transformed_counts)
         report["transformed_feature_counts"] = transformed_counts
     if kernel_alignment is not None:
-        from kernel_alignment import ARTIFACT_NAMES
+        from kernel_alignment import ARTIFACT_NAMES, TARGET_ARTIFACT_NAMES
         report["kernel_alignment"] = kernel_alignment
-        for name in ARTIFACT_NAMES:
+        alignment_artifacts = ARTIFACT_NAMES + (TARGET_ARTIFACT_NAMES if kernel_alignment.get("include_target") else ())
+        for name in alignment_artifacts:
             path = output / name
             report["artifacts"][name] = array_record(path) if path.suffix == ".npy" else file_record(path)
     baseline = getattr(regressor, "linear_baseline_", None)

@@ -58,15 +58,20 @@ class KRRConfigTests(unittest.TestCase):
         base = KRRConfig.from_mapping(self.sample())
         self.assertFalse(base.spec.reporting.kernel_alignment.enabled)
         self.assertEqual(template()["reporting"]["kernel_alignment"],
-                         {"enabled": False, "max_samples": 1000, "include_products": True})
+                         {"enabled": False, "max_samples": 1000, "include_products": True,
+                          "include_target": False, "target_space": "original"})
         definition = json_schema()["$defs"]["KernelAlignmentConfig"]
         self.assertEqual(definition["properties"]["max_samples"]["minimum"], 3)
         self.assertFalse(definition["additionalProperties"])
         enabled = base.with_overrides({"reporting.kernel_alignment.enabled": True,
                                        "reporting.kernel_alignment.max_samples": 6,
-                                       "reporting.kernel_alignment.include_products": False})
+                                       "reporting.kernel_alignment.include_products": False,
+                                       "reporting.kernel_alignment.include_target": True,
+                                       "reporting.kernel_alignment.target_space": "transformed"})
         restored = KRRConfig.from_mapping(json.loads(enabled.canonical_json()))
         self.assertEqual(restored.spec.reporting.kernel_alignment.max_samples, 6)
+        self.assertTrue(restored.spec.reporting.kernel_alignment.include_target)
+        self.assertEqual(restored.spec.reporting.kernel_alignment.target_space, "transformed")
         self.assertEqual(restored.sha256(), enabled.sha256())
         self.assertNotEqual(base.sha256(), enabled.sha256())
         with self.assertRaisesRegex(ValueError, "structured"):
@@ -77,6 +82,9 @@ class KRRConfigTests(unittest.TestCase):
                        {"reporting.kernel_alignment.max_samples": True},
                        {"reporting.kernel_alignment.max_samples": 3.0},
                        {"reporting.kernel_alignment.include_products": 1},
+                       {"reporting.kernel_alignment.include_target": "true"},
+                       {"reporting.kernel_alignment.include_target": True},
+                       {"reporting.kernel_alignment.target_space": "normalized"},
                        {"reporting.kernel_alignment.typo": True}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 base.with_overrides(change)
@@ -84,8 +92,12 @@ class KRRConfigTests(unittest.TestCase):
             path = Path(directory) / "run.toml"
             path.write_text('[[descriptors]]\nid="a"\npath="a.npy"\n[target]\npath="y.npy"\n'
                             '[split]\nmode="random"\nn_train=10\n[output]\ndirectory="out"\n'
-                            '[reporting.kernel_alignment]\nenabled=true\nmax_samples=7\n')
-            self.assertEqual(KRRConfig.load(path).spec.reporting.kernel_alignment.max_samples, 7)
+                            '[reporting.kernel_alignment]\nenabled=true\nmax_samples=7\n'
+                            'include_target=true\ntarget_space="transformed"\n')
+            saved = KRRConfig.load(path).spec.reporting.kernel_alignment
+            self.assertEqual(saved.max_samples, 7)
+            self.assertTrue(saved.include_target)
+            self.assertEqual(saved.target_space, "transformed")
 
     def test_rejects_invalid_structured_values(self):
         cases = [({"execution.n_jobs": 0}, "n_jobs"), ({"seed": True}, "seed"),

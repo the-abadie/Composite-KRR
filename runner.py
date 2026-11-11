@@ -261,16 +261,22 @@ def _execute(spec):
             sample_indices=idx_train_val,
             max_samples=spec.reporting.kernel_alignment.max_samples,
             include_products=spec.reporting.kernel_alignment.include_products,
+            include_target=spec.reporting.kernel_alignment.include_target,
+            y=y_train_val if spec.reporting.kernel_alignment.include_target else None,
+            target_space=spec.reporting.kernel_alignment.target_space,
+            target_names=target.column_names,
             random_state=spec.seed, output_dir=spec.output.directory,
         )
         alignment_end = perf_counter()
         kernel_alignment_summary = {
             key: alignment[key] for key in
-            ("method", "status", "n_available", "n_samples", "max_samples", "include_products", "weighted")
+            ("method", "status", "n_available", "n_samples", "max_samples", "include_products", "include_target", "weighted")
         }
         kernel_alignment_summary.update(
             report_path="kernel_alignment.json", elapsed_seconds=alignment_end - alignment_start,
         )
+        if alignment["include_target"]:
+            kernel_alignment_summary["target_alignment"] = alignment["target_alignment"]
         kernel_alignment_timings.append((alignment_start, alignment_end, "Post-Processing: Kernel Alignment"))
         logger.warning("Kernel alignment: %d unweighted terms on %d/%d training/CV rows; status=%s",
                        len(alignment["terms"]), alignment["n_samples"], alignment["n_available"], alignment["status"])

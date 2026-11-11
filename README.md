@@ -8,7 +8,7 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Easy to add multiple descriptors and kernels
 - Multi-target learning with shared-kernel KRR/CKRR.
 - Config validation
-- Centered kernel alignment diagnostics for fitted base and product kernels.
+- Centered kernel–kernel and kernel–target alignment diagnostics for fitted base and product kernels.
 
 ## Kernel alignment analysis
 
@@ -19,7 +19,9 @@ Enable post-fit centered kernel alignment (CKA) in a structured run config:
   "kernel_alignment": {
     "enabled": true,
     "max_samples": 1000,
-    "include_products": true
+    "include_products": true,
+    "include_target": true,
+    "target_space": "original"
   }
 }
 ```
@@ -29,6 +31,8 @@ Enable post-fit centered kernel alignment (CKA) in a structured run config:
 | `enabled` | `false` | Generate diagnostics after the final refit, before held-out evaluation. |
 | `max_samples` | `1000` | Maximum training/CV rows, integer at least 3. Use all rows when the pool is smaller. |
 | `include_products` | `true` | Compare base kernels followed by configured product terms in saved weight order. Set `false` for base kernels only. |
+| `include_target` | `false` | Also report one alignment score per kernel term and target column. Requires `enabled=true`. |
+| `target_space` | `"original"` | Use original targets or `"transformed"` targets from the final fitted target transformation. Independent of `search.target_space`; only used when `include_target=true`. |
 
 The same fields work in structured TOML under `[reporting.kernel_alignment]`,
 and appear in `krr_cli.py template` and `krr_cli.py schema`. For example:
@@ -36,6 +40,7 @@ and appear in `krr_cli.py template` and `krr_cli.py schema`. For example:
 ```bash
 .venv/bin/python krr_cli.py resolve run.json \
   --set reporting.kernel_alignment.enabled=true \
+  --set reporting.kernel_alignment.include_target=true \
   --set reporting.kernel_alignment.max_samples=500 \
   --set 'output.directory="../outputs/alignment-seed12"' \
   --output configs/alignment-seed12.json
@@ -46,7 +51,9 @@ This option is independent of `reporting.kernel_contributions`; it performs no
 additional model searches. Enabled or otherwise non-default alignment settings
 require structured configuration. Conversion to the uppercase legacy view is
 rejected instead of silently discarding them. The bundled `config.json` shows
-the disabled option; old configs that omit it also leave analysis disabled.
+the disabled options; old configs that omit them leave analysis disabled.
+Existing alignment configs that omit `include_target` keep kernel–kernel reports
+only. Setting `include_target=true` while `enabled=false` is a validation error.
 
 For Gram matrices on the same rows, the statistic is:
 
@@ -81,9 +88,16 @@ The output directory receives:
 | `kernel_alignment.csv` | Labeled square alignment matrix in the same term order. |
 | `kernel_alignment.png` | Heatmap, with undefined entries shown in gray. |
 | `kernel_alignment_sample_indices.npy` | Exact global dataset row indices in matrix order. |
+| `kernel_target_alignment.csv` | Optional term-by-target score matrix, with one labeled column per target. |
+| `kernel_target_alignment.png` | Optional term-by-target heatmap, with undefined entries in gray. |
 
 `run_metrics.json` includes an alignment summary and elapsed seconds, plus SHA-256
-records for all four artifacts. Timings are logged separately from final model
+records for all four core artifacts and both target artifacts when enabled.
+Its alignment summary also includes the target scores, names, and target space.
+The JSON report uses schema version 2; the existing square `alignment` matrix and
+pairwise CSV layout are preserved. Optional scores live in the JSON
+`target_alignment` section; historical reports are not rewritten.
+Timings are logged separately from final model
 evaluation. Alignment artifacts are diagnostics, not authoritative model result
 records; the workspace's `reports/` recording policy still applies to research runs.
 
@@ -107,6 +121,44 @@ data and reserve held-out test data for final evaluation. No terms are pruned
 automatically. See [Cortes et al. (2012)](https://www.jmlr.org/papers/v13/cortes12a.html)
 and [Kornblith et al. (2019)](https://proceedings.mlr.press/v97/kornblith19a.html)
 for centered alignment and its interpretation.
+
+### Kernel–target alignment
+
+With `reporting.kernel_alignment.include_target=true`, each reported unweighted
+base/product term is compared with a separate linear target kernel for each
+target column. For centered target vector `y_c` and centered term `K_c`:
+
+```text
+K_y = y_c y_c^T
+KTA(K, y) = y_c^T K_c y_c / (||K_c||_F * ||y_c||_2^2)
+```
+
+Scores use exactly the kernel report's sampled global indices, in the same row
+order. Only training/CV labels are passed to the diagnostic. No held-out labels
+or predictions are read, and no transforms are refitted. `target_space="original"`
+uses the full original target values; `"transformed"` reuses the final model's
+target transformer, fitted on the complete outer-training/CV pool. This choice
+is separate from the CV scoring space. For a model with an affine baseline,
+both spaces still use full targets, not baseline residuals.
+
+Multi-target reports contain one column per target in `target_names` order,
+without pooling or weighting different physical units. Centered alignment is
+invariant to an individual target's nonzero affine rescaling, so standardizing
+a target alone does not change its score. Nonlinear transforms such as log can
+change the score. A constant target on the sampled rows is undefined even when
+the full training pool varies; its scores are JSON `null`, CSV blanks, and gray
+cells, with `constant` target status and overall report status `partial`.
+An undefined kernel or fewer than three available rows also gives undefined
+target alignment. Target variation is evaluated in float64 after the selected
+target transformation.
+
+The calculation uses normalized centered target vectors without allocating
+target Gram matrices. For `q` target columns it adds `O(q*s)` target-vector storage
+and `O(t*q*s^2)` arithmetic to the kernel analysis. High target alignment indicates
+target-relevant geometry on these samples; it does not measure unique contribution
+beyond other kernels or replace CV prediction error. These are post-fit training
+diagnostics. Any kernel or bandwidth selection based on them belongs within the
+training/CV protocol, with an independent evaluation of the selection procedure.
 
 The Python API compares the unweighted kernel terms of a fitted exact or
 Nyström estimator (also accepted inside a fitted `TransformedTargetRegressor`):
@@ -135,8 +187,8 @@ report = analyze_kernel_alignment(
 
 The `target_alignment` report contains one score per kernel term and target
 column, using the same sampled rows as the pairwise matrix. It compares each
-term with the centered linear target kernel `np.outer(y, y)`, without allocating that
-target Gram matrix. `target_space="transformed"` requires a fitted
+term with the centered linear target kernel `np.outer(y, y)`, without allocating
+that target Gram matrix. `target_space="transformed"` requires a fitted
 `TransformedTargetRegressor` and reuses its final target transformation without
 refitting. With an affine baseline, labels remain the full targets, not baseline
 residuals. Constant sampled targets have undefined scores. When an output
@@ -391,7 +443,7 @@ A small complete configuration is:
   "kernel_products": [["overlap", "coulomb"]],
   "split": {"mode": "random", "n_train": 1000, "n_folds": 5},
   "execution": {"backend": "numpy", "n_jobs": 8, "distance_cache": {"n_jobs": 8}},
-  "reporting": {"kernel_alignment": {"enabled": true, "max_samples": 500}},
+  "reporting": {"kernel_alignment": {"enabled": true, "max_samples": 500, "include_target": true}},
   "output": {"directory": "../outputs/seed12"}
 }
 ```
@@ -484,7 +536,9 @@ artifact hashes, and runtime/GPU metadata. `validation_folds.npz` preserves
 global training and validation indices for every CV fold. These engine artifacts
 are the evidence for downstream authoritative reporting under `reports/`.
 Optional [kernel alignment reports](#kernel-alignment-analysis) add training-only
-CKA matrices, a heatmap, sampled row indices, and artifact checksums.
+CKA matrices, heatmaps, sampled row indices, and artifact checksums. Set
+`reporting.kernel_alignment.include_target=true` to include per-target alignment
+in the same report and run metrics, plus a target-score CSV and heatmap.
 
 For CUDA timing studies, set `execution.torch.warmup_size` (for example 512).
 The run warms distance, Gaussian-kernel, Cholesky and solve operations in its

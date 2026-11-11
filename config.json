@@ -48,7 +48,9 @@
     "kernel_alignment": {
       "enabled": false,
       "max_samples": 1000,
-      "include_products": true
+      "include_products": true,
+      "include_target": false,
+      "target_space": "original"
     }
   },
   "run_name": "QM7_OVERLAP_CONCAT_DCT_100_0.70frac",

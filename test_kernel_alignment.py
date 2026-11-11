@@ -203,12 +203,14 @@ class AlignmentRunTests(unittest.TestCase):
                 "search": {"random": {"stage1": 1, "stage2": 1}, "bayesian": {"trials": 0}},
                 "execution": {"n_jobs": 1, "distance_cache": {"n_jobs": 1}},
             }
-            for mode in ("exact", "disabled", "nystrom"):
+            for mode in ("exact", "disabled", "pairwise_only", "nystrom"):
                 config = json.loads(json.dumps(common))
                 config["output"] = {"directory": mode}
                 if mode != "disabled":
                     config["reporting"] = {"kernel_alignment": {
                         "enabled": True, "max_samples": 7, "include_products": mode == "exact",
+                        "include_target": mode != "pairwise_only",
+                        "target_space": "transformed" if mode == "nystrom" else "original",
                     }}
                 if mode == "nystrom":
                     config["model"] = {"backend": "nystrom", "nystrom": {"n_landmarks": 5, "batch_size": 4}}
@@ -235,12 +237,34 @@ class AlignmentRunTests(unittest.TestCase):
                 self.assertFalse(np.intersect1d(report["sample_indices"], held).size)
                 self.assertEqual(metrics["kernel_alignment"]["n_samples"], 7)
                 self.assertGreater(metrics["kernel_alignment"]["elapsed_seconds"], 0.)
-                for name in ARTIFACT_NAMES:
+                artifacts = ARTIFACT_NAMES
+                if mode == "pairwise_only":
+                    self.assertNotIn("target_alignment", report)
+                    self.assertFalse((output / TARGET_ARTIFACT_NAMES[0]).exists())
+                else:
+                    target = report["target_alignment"]
+                    self.assertEqual(target["target_names"], ["one", "two"])
+                    self.assertEqual(target["target_space"], "transformed" if mode == "nystrom" else "original")
+                    self.assertEqual(metrics["kernel_alignment"]["target_alignment"], target)
+                    self.assertEqual(np.shape(target["alignment"]), (len(report["terms"]), 2))
+                    # Reconstruct the first fitted descriptor kernel independently,
+                    # and compare it with labels at the saved GLOBAL sample IDs.
+                    from preprocess import make_data_preprocessor
+                    transform = make_data_preprocessor("standard", pca_components=2)
+                    block = transform.fit_transform(np.load(root / "a.npy")[train])
+                    selected_block = block[report["sample_positions"]]
+                    kernel = pairwise_kernels(selected_block, metric="rbf", gamma=report["gammas"][0])
+                    labels = np.load(root / "y.npy")[report["sample_indices"]]
+                    expected = [reference_alignment(kernel, np.outer(column, column)) for column in labels.T]
+                    assert_allclose(target["alignment"][0], expected, atol=1e-14)
+                    artifacts += TARGET_ARTIFACT_NAMES
+                for name in artifacts:
                     expected = hashlib.sha256((output / name).read_bytes()).hexdigest()
                     self.assertEqual(metrics["artifacts"][name]["sha256"], expected)
             # Diagnostics must leave the fitted solution and all test predictions unchanged.
             for name in ("y_predictions.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy"):
                 assert_array_equal(np.load(root / "exact" / name), np.load(root / "disabled" / name))
+                assert_array_equal(np.load(root / "exact" / name), np.load(root / "pairwise_only" / name))
 
 
 class KernelTargetAlignmentTests(unittest.TestCase):
@@ -278,6 +302,11 @@ class KernelTargetAlignmentTests(unittest.TestCase):
         self.assertEqual(report["target_alignment"]["targets"][2]["status"], "constant")
         self.assertEqual(report["status"], "partial")
         self.assertTrue(any("constant" in warning for warning in report["warnings"]))
+        for scale in (1e200, 1e-200):
+            rescaled = analyze_kernel_alignment(case.estimator(), case.X,
+                                               y=case.y * scale, include_target=True)
+            assert_allclose(np.asarray(rescaled["target_alignment"]["alignment"])[:, 0],
+                            scores[:, 0], atol=1e-14)
         # The entire pool varies; the deterministic sampled rows happen to be constant.
         selected = analyze_kernel_alignment(case.estimator(), case.X, max_samples=3)["sample_positions"]
         y = case.y.copy()
