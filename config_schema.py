@@ -32,6 +32,18 @@ class SpatialDCTConfig(ConfigModel):
         return self
 
 
+class SpatialFFTConfig(ConfigModel):
+    block_size: PositiveInt = Field(description="Spatial bins per contiguous channel before orthonormal real FFT.")
+    n_frequencies: PositiveInt = Field(description="Retained nonnegative frequencies per channel, including DC.")
+    post_normalization: Literal["none", "standard"] = Field(default="none", description="Optional training-fold scaling of retained packed Fourier coordinates.")
+
+    @model_validator(mode="after")
+    def valid_width(self):
+        if self.n_frequencies > self.block_size // 2 + 1:
+            raise ValueError("spatial_fft.n_frequencies exceeds the real FFT frequency count.")
+        return self
+
+
 class DescriptorConfig(ConfigModel):
     id: Text = Field(description="Unique descriptor name used by kernel_products.")
     path: Text = Field(description="NPY file or compressed-shard JSON manifest; relative paths are relative to this configuration file.")
@@ -41,6 +53,13 @@ class DescriptorConfig(ConfigModel):
     pca_components: PCAComponents = None
     pca_whiten: bool = False
     spatial_dct: SpatialDCTConfig | None = Field(default=None, description="Fixed channel-wise DCT after fold-fitted normalization, optional fold-fitted coefficient scaling, then optional PCA.")
+    spatial_fft: SpatialFFTConfig | None = Field(default=None, description="Fixed channel-wise orthonormal FFT after fold-fitted normalization; complex coordinates share the descriptor kernel.")
+
+    @model_validator(mode="after")
+    def one_spatial_transform(self):
+        if self.spatial_dct is not None and self.spatial_fft is not None:
+            raise ValueError("Choose only one of spatial_dct and spatial_fft.")
+        return self
 
 
 class TargetConfig(ConfigModel):

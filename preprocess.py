@@ -9,7 +9,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted, validate_data
-from scipy.fft import dct
+from scipy.fft import dct, rfft
 
 
 logger = logging.getLogger("pre-processing")
@@ -42,12 +42,47 @@ class SpatialDCT(TransformerMixin, BaseEstimator):
         return dct(channels, type=2, norm="ortho", axis=-1)[..., :self.n_components].reshape(len(X), -1)
 
 
+class SpatialFFT(TransformerMixin, BaseEstimator):
+    """Channel-wise Fourier projection with isometric real/imaginary packing."""
+
+    def __init__(self, *, block_size, n_frequencies):
+        self.block_size = block_size
+        self.n_frequencies = n_frequencies
+
+    def fit(self, X, y=None):
+        if (type(self.block_size) is not int or type(self.n_frequencies) is not int
+                or self.block_size < 1 or not 0 < self.n_frequencies <= self.block_size // 2 + 1):
+            raise ValueError("Spatial FFT requires integer bins and 0 < n_frequencies <= block_size//2+1")
+        X = validate_data(self, X, dtype=[np.float64, np.float32])
+        if X.shape[1] % self.block_size:
+            raise ValueError("Descriptor width must be a multiple of spatial_fft.block_size")
+        self.channel_width_ = min(2 * self.n_frequencies - 1, self.block_size)
+        self.n_features_out_ = X.shape[1] // self.block_size * self.channel_width_
+        return self
+
+    def transform(self, X):
+        check_is_fitted(self, "n_features_out_")
+        X = validate_data(self, X, reset=False, dtype=[np.float64, np.float32])
+        channels = X.reshape(len(X), -1, self.block_size)
+        coefficients = rfft(channels, norm="ortho", axis=-1)[..., :self.n_frequencies]
+        packed = np.empty(channels.shape[:-1] + (self.channel_width_,), dtype=X.dtype)
+        packed[..., 0] = coefficients[..., 0].real
+        stop = min(self.n_frequencies, (self.block_size + 1) // 2)
+        packed[..., 1:2*stop-1:2] = np.sqrt(2) * coefficients[..., 1:stop].real
+        packed[..., 2:2*stop:2] = np.sqrt(2) * coefficients[..., 1:stop].imag
+        if self.block_size % 2 == 0 and self.n_frequencies == self.block_size // 2 + 1:
+            packed[..., -1] = coefficients[..., -1].real
+        return packed.reshape(len(X), -1)
+
+
 def descriptor_preprocessing(descriptor):
     """Keep legacy string recipes; carry structured operations through all caches."""
-    if descriptor.spatial_dct is None:
-        return descriptor.normalization
-    return {"normalization": descriptor.normalization,
-            "spatial_dct": descriptor.spatial_dct.model_dump(mode="json", exclude_defaults=True)}
+    for name in ("spatial_dct", "spatial_fft"):
+        operation = getattr(descriptor, name, None)
+        if operation is not None:
+            return {"normalization": descriptor.normalization,
+                    name: operation.model_dump(mode="json", exclude_defaults=True)}
+    return descriptor.normalization
 
 
 def make_target_preprocessor(transform: str):
@@ -101,11 +136,13 @@ def make_data_preprocessor(
     pca_whiten: bool = False,
 ):
     steps = []
-    spatial_dct = None
+    spatial_operation = None
     if isinstance(transform, Mapping):
-        if set(transform) != {"normalization", "spatial_dct"}:
+        operations = set(transform) - {"normalization"}
+        if "normalization" not in transform or len(operations) != 1 or not operations <= {"spatial_dct", "spatial_fft"}:
             raise ValueError("Unknown descriptor preprocessing recipe fields")
-        spatial_dct = transform["spatial_dct"]
+        spatial_operation = next(iter(operations))
+        spatial_options = transform[spatial_operation]
         transform = transform["normalization"]
 
     if transform == "none" or transform == "passthrough":
@@ -125,12 +162,13 @@ def make_data_preprocessor(
     else:
         raise ValueError(f'Unknown data transform: "{transform}"')
 
-    if spatial_dct is not None:
-        dct_options = dict(spatial_dct)
-        post_normalization = dct_options.pop("post_normalization", "none")
+    if spatial_operation is not None and spatial_options is not None:
+        options = dict(spatial_options)
+        post_normalization = options.pop("post_normalization", "none")
         if post_normalization not in ("none", "standard"):
-            raise ValueError(f"Unknown spatial DCT post-normalization: {post_normalization}")
-        steps.append(("spatial_dct", SpatialDCT(**dct_options)))
+            raise ValueError(f"Unknown spatial transform post-normalization: {post_normalization}")
+        transform_type = SpatialDCT if spatial_operation == "spatial_dct" else SpatialFFT
+        steps.append((spatial_operation, transform_type(**options)))
         if post_normalization == "standard":
             steps.append(("post_scaler", StandardScaler()))
 

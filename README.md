@@ -513,6 +513,30 @@ With every mode retained and post-normalization `"none"`, RBF distances are
 preserved relative to the same normalization without DCT. `spatial_dct` is structured-only; conversion to legacy
 fields is rejected rather than dropping this operation.
 
+Use `spatial_fft` to preserve complex Fourier coordinates after the same
+fold-fitted spatial normalization:
+
+```json
+{"id": "q2", "path": "q2_sampled.npy", "kernel": "rbf",
+ "normalization": "standard",
+ "spatial_fft": {"block_size": 121, "n_frequencies": 17,
+                 "post_normalization": "none"}}
+```
+
+Each channel uses an orthonormal real FFT and keeps frequencies starting at DC.
+Coordinates are packed as DC, then sqrt(2) times the real and imaginary parts
+of each interior frequency. An included even-length Nyquist mode contributes
+only its unscaled real value. Thus each channel has
+`min(2*n_frequencies-1, block_size)` real coordinates, all within one component
+kernel. Retaining every frequency with no post-normalization preserves L2/RBF
+distances of the normalized spatial bins, including validation-to-training
+distances. Truncation discards high-frequency coordinates. Optional
+`post_normalization: "standard"` fits another training-fold scaler and changes
+that metric. Spatial normalization is always fitted before the transform, never
+on the whole dataset. Choose one of `spatial_dct` and `spatial_fft`; PCA may
+follow either. Both transforms use the same CV caches, final refit and saved
+inference pipeline, and both require structured configuration.
+
 `run_metrics.json` keeps `features` as the number of stored input features and
 also records `kernel_features` and `transformed_feature_counts` for fitted exact
 models. A fold-fitted reduction can require larger input arrays than its final

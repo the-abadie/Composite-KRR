@@ -142,6 +142,8 @@ def to_flat(model: RunConfig) -> dict[str, Any]:
         raise ValueError("kernel_alignment requires structured configuration; legacy fields cannot represent it")
     if any(d.spatial_dct is not None for d in model.descriptors):
         raise ValueError("spatial_dct requires structured configuration; legacy fields cannot represent it")
+    if any(d.spatial_fft is not None for d in model.descriptors):
+        raise ValueError("spatial_fft requires structured configuration; legacy fields cannot represent it")
     document = model.model_dump(mode="json")
     values = {}
     for old, path in FIELDS.items():
