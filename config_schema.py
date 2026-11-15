@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, m
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonnegativeInt = Annotated[StrictInt, Field(ge=0)]
 PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+NonnegativeFloat = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+Seed = Annotated[StrictInt, Field(ge=0, le=2**32 - 1)]
 Fraction = Annotated[float, Field(gt=0, lt=1, allow_inf_nan=False)]
 UnitFraction = Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1)]
@@ -121,14 +123,42 @@ class RandomSearchConfig(ConfigModel):
     stage3: NonnegativeInt = 0
 
 
+class TPESamplerConfig(ConfigModel):
+    multivariate: bool = False
+    group: bool = False
+    n_startup_trials: NonnegativeInt = 10
+    n_ei_candidates: PositiveInt = 24
+    constant_liar: bool = False
+    consider_endpoints: bool = False
+    consider_magic_clip: bool = True
+    prior_weight: PositiveFloat = 1.0
+
+    @model_validator(mode="after")
+    def grouping_requires_multivariate(self):
+        if self.group and not self.multivariate:
+            raise ValueError("TPE group requires multivariate=true.")
+        return self
+
+
 class BayesianConfig(ConfigModel):
     trials: NonnegativeInt = 50
     timeout: PositiveFloat | None = None
     patience: PositiveInt | None = 25
     batch_size: NonnegativeInt = 1
+    refine_decades: PositiveFloat = 0.3
+    weight_logit_radius: PositiveFloat = 1.5
+    min_delta_absolute: NonnegativeFloat = 0.0
+    min_delta_relative: NonnegativeFloat = 0.0
+    sampler: TPESamplerConfig = Field(default_factory=TPESamplerConfig)
 
 
 class SearchConfig(ConfigModel):
+    seed: Seed | None = Field(default=None, description="Optimizer seed; null inherits the run/split seed.")
+    history_batch_size: PositiveInt = Field(default=32, description="Maximum cached candidates per durable history checkpoint; rounded up to the GPU candidate batch size.")
+    gamma_prior_decades: PositiveFloat = 2.5
+    refine_decades: PositiveFloat = 1.0
+    top_k_padding_decades: PositiveFloat = 0.5
+    stage3_weight_concentration: PositiveFloat = 25.0
     alpha_bounds: Bounds = Field(default_factory=lambda: [1e-9, 1e2])
     gamma_bounds: Bounds | Annotated[list[Bounds], Field(min_length=1)] = Field(default_factory=lambda: [1e-9, 1e2])
     random: RandomSearchConfig = Field(default_factory=RandomSearchConfig)

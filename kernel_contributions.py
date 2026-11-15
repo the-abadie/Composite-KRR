@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -108,6 +109,7 @@ def evaluate_kernel_contributions(
             search_kwargs=search_kwargs,
             krr_backend=krr_backend,
             nystrom_kwargs=nystrom_kwargs,
+            search_output_dir=None if output_dir is None else Path(output_dir) / "kernel_contribution_searches" / f"single_{component_index}",
         )
     time_single_end = perf_counter()
     timings.append(
@@ -143,6 +145,7 @@ def evaluate_kernel_contributions(
             search_kwargs=search_kwargs,
             krr_backend=krr_backend,
             nystrom_kwargs=nystrom_kwargs,
+            search_output_dir=None if output_dir is None else Path(output_dir) / "kernel_contribution_searches" / f"drop_{component_index}",
         )
     time_ablation_end = perf_counter()
     timings.append(
@@ -183,6 +186,7 @@ def _fit_component_subset(
     search_kwargs: dict,
     krr_backend: str,
     nystrom_kwargs: dict,
+    search_output_dir=None,
 ):
     component_indices = list(component_indices)
     if not component_indices:
@@ -226,7 +230,10 @@ def _fit_component_subset(
         n_components=len(component_indices),
         scoring=scoring,
         cv=cv,
-        **dict(search_kwargs),
+        **(dict(search_kwargs) | {"search_output_dir": search_output_dir,
+                                  "search_context": {"label": label, "descriptor_ids": subset_names,
+                                                     "kernel_types": subset_kernel_types,
+                                                     "kernel_products": subset_products}}),
     )
 
 

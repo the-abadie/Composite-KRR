@@ -10,6 +10,13 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 - Config validation
 - Centered kernel–kernel and kernel–target alignment diagnostics for fitted base and product kernels.
 
+## Search controls and evidence
+
+All runs save numerical trial parameters, fold scores, adaptive bounds and timing
+with an independent optimizer-seed option. Search widths, TPE settings and
+meaningful-progress patience are configurable. See [search controls and saved
+evidence](docs/search-evidence.md) for the complete config and artifact format.
+
 ## Kernel alignment analysis
 
 Enable post-fit centered kernel alignment (CKA) in a structured run config:

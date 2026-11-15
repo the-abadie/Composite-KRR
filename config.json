@@ -56,29 +56,50 @@
   "run_name": "QM7_OVERLAP_CONCAT_DCT_100_0.70frac",
   "schema_version": 1,
   "search": {
+    "seed": null,
+    "history_batch_size": 32,
+    "gamma_prior_decades": 2.5,
+    "refine_decades": 1.0,
+    "top_k_padding_decades": 0.5,
+    "stage3_weight_concentration": 25.0,
     "alpha_bounds": [
       1e-09,
       100.0
     ],
-    "bayesian": {
-      "batch_size": 1,
-      "patience": 25,
-      "timeout": null,
-      "trials": 50
-    },
     "gamma_bounds": [
       1e-09,
       100.0
     ],
-    "gamma_prior_max_samples": 5000,
     "random": {
       "stage1": 75,
       "stage2": 75,
       "stage3": 0
     },
-    "scoring": "neg_mean_absolute_error",
+    "bayesian": {
+      "trials": 50,
+      "timeout": null,
+      "patience": 25,
+      "batch_size": 1,
+      "refine_decades": 0.3,
+      "weight_logit_radius": 1.5,
+      "min_delta_absolute": 0.0,
+      "min_delta_relative": 0.0,
+      "sampler": {
+        "multivariate": false,
+        "group": false,
+        "n_startup_trials": 10,
+        "n_ei_candidates": 24,
+        "constant_liar": false,
+        "consider_endpoints": false,
+        "consider_magic_clip": true,
+        "prior_weight": 1.0
+      }
+    },
     "top_k_fraction": 0.25,
-    "top_k_min_candidates": 5
+    "top_k_min_candidates": 5,
+    "gamma_prior_max_samples": 5000,
+    "scoring": "neg_mean_absolute_error",
+    "target_space": "original"
   },
   "seed": 1,
   "split": {

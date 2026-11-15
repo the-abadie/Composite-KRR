@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import gc
-from time import monotonic
+from time import monotonic, perf_counter
+from search_evidence import MeaningfulProgress
 
 import logging
 import numpy as np
@@ -62,6 +63,10 @@ def fit_bayesian_search(
     distance_cache=None,
     kernel_weight_center=None,
     kernel_weight_logit_radius: float = 1.5,
+    sampler_options: dict | None = None,
+    min_delta_absolute: float = 0.0,
+    min_delta_relative: float = 0.0,
+    journal=None,
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
@@ -95,7 +100,10 @@ def fit_bayesian_search(
         pytorch_devices=pytorch_devices,
     )
     sampler_seed = random_state if isinstance(random_state, int) else None
-    sampler = optuna.samplers.TPESampler(seed=sampler_seed)
+    from config_schema import TPESamplerConfig
+    sampler_options = TPESamplerConfig.model_validate(sampler_options or {}).model_dump()
+    progress = MeaningfulProgress(min_delta_absolute, min_delta_relative)
+    sampler = optuna.samplers.TPESampler(seed=sampler_seed, **sampler_options)
     study = optuna.create_study(direction="maximize", sampler=sampler)
 
     unprefixed_initial_params = _unprefix_params(initial_params, prefix)
@@ -113,7 +121,26 @@ def fit_bayesian_search(
         n_terms=n_terms,
     )
 
-    def objective(trial):
+    stage_recorder = None if journal is None else journal.stage(
+        stage_name, requested_trials=n_trials,
+        bounds={"alpha": alpha_bounds, "gammas": component_gamma_bounds,
+                "weight_logit_center": _center_logits(kernel_weight_center, size=n_terms).tolist(),
+                "weight_logit_radius": kernel_weight_logit_radius,
+                "weight_logit_bounds": [[float(c - kernel_weight_logit_radius), float(c + kernel_weight_logit_radius)]
+                                        for c in _center_logits(kernel_weight_center, size=n_terms)] if n_terms > 1 else [],
+                "sampler": sampler_options})
+
+    def record_completed_trial(study, trial):
+        meaningful = progress.observe(trial.number, trial.value)
+        if stage_recorder is not None:
+            stage_recorder.trial(
+                _params_from_bayesian_trial(trial.params, n_components=n_components, n_terms=n_terms),
+                trial.user_attrs.get("split_scores", []), stage_trial=trial.number + 1,
+                timing=trial.user_attrs.get("timing", {}),
+                sampler_params=trial.params, meaningful_improvement=meaningful)
+
+    def evaluate_trial(trial):
+        started = perf_counter()
         params = _suggest_bayesian_params(
             trial,
             n_components=n_components,
@@ -149,15 +176,30 @@ def fit_bayesian_search(
                 pytorch_dtype=_cache_distance_dtype(distance_cache),
                 pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             )
-            if not np.all(np.isfinite(scores)):
-                return -np.inf
-
         scores = np.asarray(scores, dtype=float)
+        trial.set_user_attr("split_scores", scores.tolist())
+        trial.set_user_attr("timing", {"scope": "trial", "evaluation_seconds": perf_counter() - started})
         if not np.all(np.isfinite(scores)):
             return -np.inf
-
-        trial.set_user_attr("split_scores", scores.tolist())
         return float(np.mean(scores))
+
+    def record_failed_trial(trial, error, timing):
+        if stage_recorder is not None:
+            try:
+                params = _params_from_bayesian_trial(trial.params, n_components=n_components, n_terms=n_terms)
+            except KeyError:
+                params = dict(trial.params)
+            stage_recorder.trial(params, [], stage_trial=trial.number + 1, timing=timing,
+                                 sampler_params=trial.params, status="failed",
+                                 error={"type": type(error).__name__, "message": str(error)})
+
+    def objective(trial):
+        started = perf_counter()
+        try:
+            return evaluate_trial(trial)
+        except Exception as exc:
+            record_failed_trial(trial, exc, {"scope": "trial", "evaluation_seconds": perf_counter() - started})
+            raise
 
     milestones = _progress_milestones(n_trials)
 
@@ -173,12 +215,12 @@ def fit_bayesian_search(
         if patience is None or trial.value is None:
             return
 
-        trials_since_improvement = trial.number - study.best_trial.number
+        trials_since_improvement = trial.number - progress.last_trial
         if trials_since_improvement >= patience:
             logger.warning(
                 f"{stage_name} stopped after {trials_since_improvement} "
                 "trials without improvement "
-                f"(best trial {study.best_trial.number + 1})."
+                f"(last meaningful improvement trial {progress.last_trial + 1})."
             )
             study.stop()
 
@@ -187,7 +229,7 @@ def fit_bayesian_search(
             objective,
             n_trials=n_trials,
             timeout=timeout,
-            callbacks=[log_progress, stop_after_patience],
+            callbacks=[record_completed_trial, log_progress, stop_after_patience],
         )
     else:
         _optimize_bayesian_search_batched(
@@ -218,7 +260,15 @@ def fit_bayesian_search(
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
             bayesian_batch_size=bayesian_batch_size,
             milestones=milestones,
+            trial_callback=record_completed_trial,
+            failure_callback=record_failed_trial,
+            progress=progress,
         )
+
+    if stage_recorder is not None:
+        reason = "trial_limit" if len(study.trials) >= n_trials else (
+            "patience" if patience is not None and study.trials[-1].number - progress.last_trial >= patience else "timeout")
+        stage_recorder.finish(stop_reason=reason)
 
     best_params = _params_from_bayesian_trial(
         study.best_trial.params,
@@ -322,6 +372,9 @@ def _optimize_bayesian_search_batched(
     pytorch_candidate_batch_size: int,
     bayesian_batch_size: int,
     milestones: set[int],
+    trial_callback=None,
+    failure_callback=None,
+    progress=None,
 ) -> None:
     start_time = monotonic()
     completed_trials = 0
@@ -352,22 +405,31 @@ def _optimize_bayesian_search_batched(
             trials.append(trial)
             params_batch.append(params)
 
-        split_scores = _score_bayesian_param_batch(
-            estimator,
-            X,
-            y,
-            params_batch,
-            scoring=scoring,
-            cv=cv,
-            n_jobs=n_jobs,
-            blas_threads=blas_threads,
-            prefix=prefix,
-            distance_cache=distance_cache,
-            cached_scoring_backend=cached_scoring_backend,
-            pytorch_device=pytorch_device,
-            pytorch_devices=pytorch_devices,
-            pytorch_candidate_batch_size=pytorch_candidate_batch_size,
-        )
+        scoring_started = perf_counter()
+        try:
+            split_scores = _score_bayesian_param_batch(
+                estimator,
+                X,
+                y,
+                params_batch,
+                scoring=scoring,
+                cv=cv,
+                n_jobs=n_jobs,
+                blas_threads=blas_threads,
+                prefix=prefix,
+                distance_cache=distance_cache,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+                pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+            )
+        except Exception as exc:
+            if failure_callback is not None:
+                for trial in trials:
+                    failure_callback(trial, exc, {"scope": "failed_batch", "batch_size": len(trials),
+                                                  "batch_wall_seconds": perf_counter() - scoring_started})
+            raise
+        batch_seconds = perf_counter() - scoring_started
         mean_scores = _mean_finite_scores(split_scores)
 
         stop_requested = False
@@ -377,10 +439,13 @@ def _optimize_bayesian_search_batched(
             split_scores,
         ):
             value = float(mean_score) if np.isfinite(mean_score) else -np.inf
-            if np.all(np.isfinite(trial_split_scores)):
-                trial.set_user_attr("split_scores", trial_split_scores.tolist())
+            trial.set_user_attr("split_scores", trial_split_scores.tolist())
+            trial.set_user_attr("timing", {"scope": "bayesian_batch", "batch_wall_seconds": batch_seconds,
+                                           "batch_size": len(trials), "amortized_seconds": batch_seconds / len(trials)})
 
             study.tell(trial, value)
+            if trial_callback is not None:
+                trial_callback(study, next(t for t in study.get_trials(deepcopy=False) if t.number == trial.number))
             completed_trials += 1
             _log_batched_progress(
                 stage_name,
@@ -393,6 +458,7 @@ def _optimize_bayesian_search_batched(
                     study,
                     patience=patience,
                     stage_name=stage_name,
+                    progress=progress,
                 )
 
         if stop_requested:
@@ -482,6 +548,7 @@ def _batched_patience_stop_requested(
     *,
     patience: int | None,
     stage_name: str,
+    progress=None,
 ) -> bool:
     if patience is None:
         return False
@@ -498,14 +565,15 @@ def _batched_patience_stop_requested(
     if latest_trial.value is None:
         return False
 
-    trials_since_improvement = latest_trial.number - study.best_trial.number
+    last_improvement = study.best_trial.number if progress is None else progress.last_trial
+    trials_since_improvement = latest_trial.number - last_improvement
     if trials_since_improvement < patience:
         return False
 
     logger.warning(
         f"{stage_name} stopped after {trials_since_improvement} "
         "trials without improvement "
-        f"(best trial {study.best_trial.number + 1})."
+        f"(last meaningful improvement trial {last_improvement + 1})."
     )
     return True
 

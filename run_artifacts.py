@@ -99,6 +99,16 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
               "artifacts": {name: array_record(output / name) for name in
                             ("fold_val_idx.npy", "test_idx.npy", "validation_folds.npz",
                              "y_predictions.npy", "y_true.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy")}}
+    report["search_config"] = spec.search.model_dump(mode="json")
+    report["optimizer_seed"] = spec.search.seed if spec.search.seed is not None else spec.seed
+    evidence = getattr(search_result, "search_evidence_", None)
+    if evidence is not None:
+        report["search_evidence"] = evidence
+        for name in ("search_history.jsonl", "search_summary.json"):
+            report["artifacts"][name] = file_record(output / name)
+        for path in sorted((output / "kernel_contribution_searches").glob("*/*")):
+            if path.name in {"search_history.jsonl", "search_summary.json"}:
+                report["artifacts"][str(path.relative_to(output))] = file_record(path)
     regressor = getattr(getattr(search_result, "best_estimator_", None), "regressor_", None)
     transformed_counts = getattr(regressor, "transformed_feature_counts_", None)
     if transformed_counts is not None:

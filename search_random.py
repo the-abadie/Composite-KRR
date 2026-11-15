@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from contextlib import nullcontext
+from search_evidence import SearchJournal, describe_distribution
 import gc
 from time import perf_counter
 
@@ -120,6 +122,7 @@ class CachedRandomSearchCV:
         pytorch_device: str | None = "auto",
         pytorch_devices=None,
         pytorch_candidate_batch_size: int = 1,
+        stage_recorder=None,
     ):
         self.estimator = estimator
         self.param_distributions = param_distributions
@@ -135,6 +138,7 @@ class CachedRandomSearchCV:
         self.pytorch_device = pytorch_device
         self.pytorch_devices = pytorch_devices
         self.pytorch_candidate_batch_size = pytorch_candidate_batch_size
+        self.stage_recorder = stage_recorder
 
     def fit(self, X, y):
         candidates = list(
@@ -152,22 +156,35 @@ class CachedRandomSearchCV:
             candidates,
             self.distance_cache,
         )
-        split_scores = score_candidates_from_cache(
-            alphas=alphas,
-            gammas=gammas,
-            weights=weights,
-            cache=self.distance_cache,
-            scoring=self.scoring,
-            backend=self.cached_scoring_backend,
-            n_jobs=self.n_jobs,
-            blas_threads=self.blas_threads,
-            pytorch_device=self.pytorch_device,
-            pytorch_devices=self.pytorch_devices,
-            pytorch_dtype=_cache_distance_dtype(self.distance_cache),
-            pytorch_candidate_batch_size=self.pytorch_candidate_batch_size,
-        )
-
-        split_scores = np.asarray(split_scores, dtype=float)
+        batch_size = len(candidates)
+        if self.stage_recorder is not None:
+            requested = self.stage_recorder.parent.settings["history_batch_size"]
+            execution_batch = self.pytorch_candidate_batch_size if normalize_cached_scoring_backend(self.cached_scoring_backend) == "pytorch" else 1
+            batch_size = max(execution_batch, ((requested + execution_batch - 1) // execution_batch) * execution_batch)
+        scored_batches = []
+        for start in range(0, len(candidates), batch_size):
+            stop = min(len(candidates), start + batch_size)
+            scoring_started = perf_counter()
+            try:
+                scores = score_candidates_from_cache(
+                    alphas=alphas[start:stop], gammas=gammas[start:stop], weights=weights[start:stop],
+                    cache=self.distance_cache, scoring=self.scoring, backend=self.cached_scoring_backend,
+                    n_jobs=self.n_jobs, blas_threads=self.blas_threads,
+                    pytorch_device=self.pytorch_device, pytorch_devices=self.pytorch_devices,
+                    pytorch_dtype=_cache_distance_dtype(self.distance_cache),
+                    pytorch_candidate_batch_size=self.pytorch_candidate_batch_size,
+                )
+            except Exception as exc:
+                if self.stage_recorder is not None:
+                    self.stage_recorder.failed_batch(candidates[start:stop], exc,
+                                                     seconds=perf_counter() - scoring_started)
+                raise
+            scores = np.asarray(scores, dtype=float)
+            if self.stage_recorder is not None:
+                self.stage_recorder.random_batch(candidates[start:stop], scores,
+                                                 seconds=perf_counter() - scoring_started)
+            scored_batches.append(scores)
+        split_scores = np.concatenate(scored_batches, axis=0)
         failed_fold_mask = ~np.isfinite(split_scores)
         valid_candidates = ~np.any(failed_fold_mask, axis=1)
         mean_scores = np.full(len(candidates), -np.inf, dtype=float)
@@ -246,6 +263,7 @@ class StagedRandomSearchResult:
     timings: list[tuple[float, float, str]]
     bayesian_stage: BayesianSearchResult | None = None
     final_estimator_: object | None = None
+    search_evidence_: dict | None = None
 
     @property
     def stages(self) -> tuple[object, ...]:
@@ -578,6 +596,7 @@ def estimate_gamma_bounds(
     block_size: int = 1024,
     max_samples: int | None = None,
     random_state=None,
+    journal=None,
 ) -> list[tuple[float, float]]:
     component_legal_bounds = _as_component_bounds(
         legal_gamma_bounds,
@@ -607,6 +626,9 @@ def estimate_gamma_bounds(
         _narrow_log_bounds_around(center, legal_bounds, decades)
         for center, legal_bounds in zip(centers, component_legal_bounds)
     ]
+    if journal is not None:
+        journal.append({"event": "gamma_prior", "centers": centers, "bounds": bounds,
+                        "decades": decades, "legal_bounds": component_legal_bounds})
     for component_index, (center, bound) in enumerate(zip(centers, bounds), start=1):
         logger.info(
             "Component %s gamma prior centered at %.6g with bounds "
@@ -984,6 +1006,12 @@ def staged_random_search_cv(
     stage3_weight_concentration: float = 25.0,
     bayesian_refine_decades: float = 0.3,
     bayesian_weight_logit_radius: float = 1.5,
+    bayesian_min_delta_absolute: float = 0.0,
+    bayesian_min_delta_relative: float = 0.0,
+    sampler_options: dict | None = None,
+    history_batch_size: int = 32,
+    search_output_dir=None,
+    search_context: dict | None = None,
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
@@ -1008,387 +1036,445 @@ def staged_random_search_cv(
             f"got {bayesian_patience}."
         )
 
-    distance_cache = None
-    scoring_distance_cache = None
-    regressor = extract_regressor(estimator)
-    n_terms = kernel_term_count(regressor, n_components)
-    using_nystrom = is_nystrom_regressor(regressor)
-    if use_distance_cache:
-        time_cache_start: float = perf_counter()
-        if using_nystrom:
-            distance_cache = _maybe_build_nystrom_distance_cache(
-                estimator,
-                X,
-                y,
-                cv,
-                n_components=n_components,
-                block_size=distance_block_size,
-                dtype=distance_dtype,
-                n_jobs=distance_cache_n_jobs,
-                memory_fraction=distance_cache_memory_fraction,
-                cached_scoring_backend=cached_scoring_backend,
-                pytorch_device=pytorch_device,
-                pytorch_devices=pytorch_devices,
+    if type(history_batch_size) is not int or history_batch_size <= 0:
+        raise ValueError("history_batch_size must be a positive integer.")
+    from config_schema import TPESamplerConfig
+    sampler_options = TPESamplerConfig.model_validate(sampler_options or {}).model_dump()
+    settings = {
+        "optimizer_seed": random_state, "n_components": n_components,
+        "alpha_bounds": alpha_bounds, "gamma_bounds": gamma_bounds,
+        "gamma_prior_max_samples": gamma_prior_max_samples,
+        "gamma_prior_decades": gamma_prior_decades, "refine_decades": refine_decades,
+        "top_k_fraction": top_k_fraction, "top_k_min_candidates": top_k_min_candidates,
+        "top_k_padding_decades": top_k_padding_decades,
+        "stage3_weight_concentration": stage3_weight_concentration,
+        "history_batch_size": history_batch_size,
+        "random_trials": [n_iter_stage1, n_iter_stage2, n_iter_stage3],
+        "bayesian_trials": n_trials_bayesian, "bayesian_timeout": bayesian_timeout,
+        "bayesian_patience": bayesian_patience,
+        "bayesian_refine_decades": bayesian_refine_decades,
+        "bayesian_weight_logit_radius": bayesian_weight_logit_radius,
+        "bayesian_min_delta_absolute": bayesian_min_delta_absolute,
+        "bayesian_min_delta_relative": bayesian_min_delta_relative,
+        "sampler": sampler_options, "scoring": str(scoring),
+        "backend": cached_scoring_backend, "distance_dtype": str(distance_dtype),
+        "random_candidate_batch_size": pytorch_candidate_batch_size,
+        "bayesian_batch_size": bayesian_batch_size,
+    }
+    manager = (SearchJournal(search_output_dir, settings=settings, context=search_context)
+               if search_output_dir is not None else nullcontext(None))
+    with manager as journal:
+        distance_cache = None
+        scoring_distance_cache = None
+        regressor = extract_regressor(estimator)
+        n_terms = kernel_term_count(regressor, n_components)
+        using_nystrom = is_nystrom_regressor(regressor)
+        if use_distance_cache:
+            time_cache_start: float = perf_counter()
+            if using_nystrom:
+                distance_cache = _maybe_build_nystrom_distance_cache(
+                    estimator,
+                    X,
+                    y,
+                    cv,
+                    n_components=n_components,
+                    block_size=distance_block_size,
+                    dtype=distance_dtype,
+                    n_jobs=distance_cache_n_jobs,
+                    memory_fraction=distance_cache_memory_fraction,
+                    cached_scoring_backend=cached_scoring_backend,
+                    pytorch_device=pytorch_device,
+                    pytorch_devices=pytorch_devices,
+                )
+                scoring_distance_cache = distance_cache
+            else:
+                distance_cache = _maybe_build_distance_cache(
+                    estimator,
+                    X,
+                    y,
+                    cv,
+                    n_components=n_components,
+                    block_size=distance_block_size,
+                    dtype=distance_dtype,
+                    n_jobs=distance_cache_n_jobs,
+                    memory_fraction=distance_cache_memory_fraction,
+                    cached_scoring_backend=cached_scoring_backend,
+                    pytorch_device=pytorch_device,
+                    pytorch_devices=pytorch_devices,
+                )
+                scoring_distance_cache = _prepare_scoring_distance_cache(
+                    distance_cache,
+                    cached_scoring_backend=cached_scoring_backend,
+                    pytorch_device=pytorch_device,
+                    pytorch_devices=pytorch_devices,
+                    dtype=distance_dtype,
+                )
+            time_cache_end: float = perf_counter()
+            cache_timing_label = (
+                (
+                    "Nyström Landmark Distance Pre-Caching"
+                    if using_nystrom
+                    else "Distance Matrix Pre-Caching"
+                )
+                if distance_cache is not None
+                else (
+                    "Nyström Landmark Distance Pre-Caching (Unavailable)"
+                    if using_nystrom
+                    else "Distance Matrix Pre-Caching (Unavailable)"
+                )
             )
-            scoring_distance_cache = distance_cache
+            time_log.info(
+                f"Kernel cache preparation completed in "
+                f"{time_dif(time_cache_start, time_cache_end)}."
+            )
         else:
-            distance_cache = _maybe_build_distance_cache(
-                estimator,
-                X,
-                y,
-                cv,
-                n_components=n_components,
-                block_size=distance_block_size,
-                dtype=distance_dtype,
-                n_jobs=distance_cache_n_jobs,
-                memory_fraction=distance_cache_memory_fraction,
-                cached_scoring_backend=cached_scoring_backend,
-                pytorch_device=pytorch_device,
-                pytorch_devices=pytorch_devices,
-            )
-            scoring_distance_cache = _prepare_scoring_distance_cache(
-                distance_cache,
-                cached_scoring_backend=cached_scoring_backend,
-                pytorch_device=pytorch_device,
-                pytorch_devices=pytorch_devices,
-                dtype=distance_dtype,
-            )
-        time_cache_end: float = perf_counter()
-        cache_timing_label = (
-            (
-                "Nyström Landmark Distance Pre-Caching"
-                if using_nystrom
-                else "Distance Matrix Pre-Caching"
-            )
-            if distance_cache is not None
-            else (
-                "Nyström Landmark Distance Pre-Caching (Unavailable)"
-                if using_nystrom
-                else "Distance Matrix Pre-Caching (Unavailable)"
-            )
-        )
-        time_log.info(
-            f"Kernel cache preparation completed in "
-            f"{time_dif(time_cache_start, time_cache_end)}."
-        )
-    else:
-        time_cache_start = 0.0
-        time_cache_end = 0.0
-        cache_timing_label = "Distance Matrix Pre-Caching (Skipped)"
+            time_cache_start = 0.0
+            time_cache_end = 0.0
+            cache_timing_label = "Distance Matrix Pre-Caching (Skipped)"
 
-    component_gamma_bounds = _as_component_bounds(gamma_bounds, n_components)
-    gamma_prior_bounds = estimate_gamma_bounds(
-        estimator,
-        X,
-        n_components=n_components,
-        legal_gamma_bounds=component_gamma_bounds,
-        decades=gamma_prior_decades,
-        distance_cache=distance_cache,
-        dtype=distance_dtype,
-        block_size=distance_block_size,
-        max_samples=gamma_prior_max_samples,
-        random_state=random_state,
-    )
-
-    stage1_estimator = _clone_with_params(
-        estimator,
-        prefix=prefix,
-        kernel_weights=_uniform_weights(n_terms).tolist(),
-    )
-    logger.warning(
-        "Beginning Stage 1 broad alpha/gamma scale search with equal "
-        f"weights. [{n_iter_stage1} iterations]"
-    )
-    time_stage1_start:float = perf_counter()
-    stage1 = _fit_search(
-        stage1_estimator,
-        X,
-        y,
-        param_distributions=make_param_distributions(
-            n_components,
-            n_terms=n_terms,
-            alpha_bounds=alpha_bounds,
-            gamma_bounds=gamma_prior_bounds,
-            prefix=prefix,
-            include_kernel_weights=False,
-        ),
-        n_iter=n_iter_stage1,
-        scoring=scoring,
-        cv=cv,
-        random_state=random_state,
-        n_jobs=n_jobs,
-        blas_threads=random_search_blas_threads,
-        refit=False,
-        stage_name="Stage 1",
-        distance_cache=scoring_distance_cache,
-        cached_scoring_backend=cached_scoring_backend,
-        pytorch_device=pytorch_device,
-        pytorch_devices=pytorch_devices,
-        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
-    )
-    time_stage1_end:float = perf_counter()
-    time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
-
-    stage1_best_params = _complete_unprefixed_params_from_search(
-        stage1,
-        n_components=n_components,
-    )
-    stage2_alpha_bounds = _narrow_log_bounds_around(
-        stage1_best_params["alpha"],
-        alpha_bounds,
-        refine_decades,
-    )
-    stage2_gamma_bounds = [
-        _narrow_log_bounds_around(gamma, legal_bounds, refine_decades)
-        for gamma, legal_bounds in zip(
-            stage1_best_params["gammas"],
-            component_gamma_bounds,
-        )
-    ]
-
-    logger.warning(
-        "Beginning Stage 2 local alpha/gamma search with simplex weights. "
-        f"[{n_iter_stage2} iterations]"
-    )
-    time_stage2_start:float = perf_counter()
-    stage2 = _fit_search(
-        estimator,
-        X,
-        y,
-        param_distributions=make_param_distributions(
-            n_components,
-            n_terms=n_terms,
-            alpha_bounds=stage2_alpha_bounds,
-            gamma_bounds=stage2_gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            prefix=prefix,
-        ),
-        n_iter=n_iter_stage2,
-        scoring=scoring,
-        cv=cv,
-        random_state=random_state,
-        n_jobs=n_jobs,
-        blas_threads=random_search_blas_threads,
-        refit=False,
-        stage_name="Stage 2",
-        distance_cache=scoring_distance_cache,
-        cached_scoring_backend=cached_scoring_backend,
-        pytorch_device=pytorch_device,
-        pytorch_devices=pytorch_devices,
-        pytorch_candidate_batch_size=pytorch_candidate_batch_size,
-    )
-    time_stage2_end:float = perf_counter()
-    time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
-
-    if n_iter_stage3 > 0:
-        stage2_top_params = _top_candidate_params(
-            stage2,
-            fraction=top_k_fraction,
-            min_candidates=top_k_min_candidates,
-        )
-        stage3_alpha_bounds = _top_k_log_bounds(
-            stage2_top_params,
-            lambda params: params[f"{prefix}alpha"],
-            legal_bounds=alpha_bounds,
-            padding_decades=top_k_padding_decades,
-        )
-        stage3_gamma_bounds = [
-            _top_k_log_bounds(
-                stage2_top_params,
-                lambda params, component_index=component_index: (
-                    params[f"{prefix}gammas"][component_index]
-                ),
-                legal_bounds=component_gamma_bounds[component_index],
-                padding_decades=top_k_padding_decades,
-            )
-            for component_index in range(n_components)
-        ]
-        stage3_weight_distribution = None
-        if n_terms > 1:
-            stage3_weight_distribution = SimplexWeightDistribution(
-                n_terms,
-                center=_average_kernel_weights(
-                    stage2_top_params,
-                    key=f"{prefix}kernel_weights",
-                    n_components=n_terms,
-                ),
-                concentration=stage3_weight_concentration,
-            )
-
-        logger.warning(
-            "Beginning Stage 3 top-k alpha/gamma refinement with centered "
-            f"simplex weights. [{n_iter_stage3} iterations]"
-        )
-        time_stage3_start:float = perf_counter()
-        stage3 = _fit_search(
+        component_gamma_bounds = _as_component_bounds(gamma_bounds, n_components)
+        gamma_prior_bounds = estimate_gamma_bounds(
             estimator,
             X,
+            n_components=n_components,
+            legal_gamma_bounds=component_gamma_bounds,
+            decades=gamma_prior_decades,
+            distance_cache=distance_cache,
+            dtype=distance_dtype,
+            block_size=distance_block_size,
+            max_samples=gamma_prior_max_samples,
+            random_state=random_state,
+            journal=journal,
+        )
+
+        stage1_estimator = _clone_with_params(
+            estimator,
+            prefix=prefix,
+            kernel_weights=_uniform_weights(n_terms).tolist(),
+        )
+        logger.warning(
+            "Beginning Stage 1 broad alpha/gamma scale search with equal "
+            f"weights. [{n_iter_stage1} iterations]"
+        )
+        time_stage1_start:float = perf_counter()
+        stage1 = _fit_search(
+            stage1_estimator,
+            X,
             y,
+            journal=journal,
             param_distributions=make_param_distributions(
                 n_components,
                 n_terms=n_terms,
-                alpha_bounds=stage3_alpha_bounds,
-                gamma_bounds=stage3_gamma_bounds,
-                kernel_weight_bounds=kernel_weight_bounds,
+                alpha_bounds=alpha_bounds,
+                gamma_bounds=gamma_prior_bounds,
                 prefix=prefix,
-                kernel_weight_distribution=stage3_weight_distribution,
+                include_kernel_weights=False,
             ),
-            n_iter=n_iter_stage3,
+            n_iter=n_iter_stage1,
             scoring=scoring,
             cv=cv,
             random_state=random_state,
             n_jobs=n_jobs,
             blas_threads=random_search_blas_threads,
             refit=False,
-            stage_name="Stage 3",
+            stage_name="Stage 1",
             distance_cache=scoring_distance_cache,
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
             pytorch_devices=pytorch_devices,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
         )
-        time_stage3_end:float = perf_counter()
-        time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
-        stage3_timing_label = "Training: Stage III"
-    else:
-        logger.warning("Skipping Stage 3 because n_iter_stage3 is 0.")
-        time_stage3_start = 0.0
-        time_stage3_end = 0.0
-        stage3 = None
-        stage3_timing_label = "Training: Stage III (Skipped)"
+        time_stage1_end:float = perf_counter()
+        time_log.info(f"Stage 1 completed in {time_dif(time_stage1_start, time_stage1_end)}.")
 
-    best_random_stage = _best_search_stage([stage1, stage2, stage3])
-    final_params = _complete_prefixed_params_from_search(
-        best_random_stage,
-        prefix=prefix,
-        n_components=n_components,
-    )
-
-    timings = [
-        (time_cache_start, time_cache_end, cache_timing_label),
-        (time_stage1_start, time_stage1_end, "Training: Stage I"),
-        (time_stage2_start, time_stage2_end, "Training: Stage II"),
-        (time_stage3_start, time_stage3_end, stage3_timing_label),
-        (0., 0., "Training: Stage IV (Skipped)"),
-    ]
-
-    random_result = StagedRandomSearchResult(
-        stage1=stage1,
-        stage2=stage2,
-        stage3=stage3,
-        final_params=final_params,
-        timings=timings
-    )
-    log_random_search_improvements(random_result, scoring=scoring, logger=logger)
-
-    bayesian_stage = None
-    if n_trials_bayesian is not None and n_trials_bayesian > 0:
-        best_random_params = _complete_unprefixed_params_from_search(
-            best_random_stage,
+        stage1_best_params = _complete_unprefixed_params_from_search(
+            stage1,
             n_components=n_components,
         )
-        bayesian_alpha_bounds = _narrow_log_bounds_around(
-            best_random_params["alpha"],
+        stage2_alpha_bounds = _narrow_log_bounds_around(
+            stage1_best_params["alpha"],
             alpha_bounds,
-            bayesian_refine_decades,
+            refine_decades,
         )
-        bayesian_gamma_bounds = [
-            _narrow_log_bounds_around(gamma, legal_bounds, bayesian_refine_decades)
+        stage2_gamma_bounds = [
+            _narrow_log_bounds_around(gamma, legal_bounds, refine_decades)
             for gamma, legal_bounds in zip(
-                best_random_params["gammas"],
+                stage1_best_params["gammas"],
                 component_gamma_bounds,
             )
         ]
 
         logger.warning(
-            "Now entering final stage: local Bayesian search over all "
-            f"hyperparameters. [{n_trials_bayesian} iterations]"
+            "Beginning Stage 2 local alpha/gamma search with simplex weights. "
+            f"[{n_iter_stage2} iterations]"
         )
-        time_bayes_start:float = perf_counter()
-        bayesian_stage = fit_bayesian_search(
+        time_stage2_start:float = perf_counter()
+        stage2 = _fit_search(
             estimator,
             X,
             y,
-            n_components=n_components,
-            alpha_bounds=bayesian_alpha_bounds,
-            gamma_bounds=bayesian_gamma_bounds,
-            kernel_weight_bounds=kernel_weight_bounds,
-            initial_params=final_params,
+            journal=journal,
+            param_distributions=make_param_distributions(
+                n_components,
+                n_terms=n_terms,
+                alpha_bounds=stage2_alpha_bounds,
+                gamma_bounds=stage2_gamma_bounds,
+                kernel_weight_bounds=kernel_weight_bounds,
+                prefix=prefix,
+            ),
+            n_iter=n_iter_stage2,
             scoring=scoring,
             cv=cv,
             random_state=random_state,
             n_jobs=n_jobs,
             blas_threads=random_search_blas_threads,
-            timeout=bayesian_timeout,
-            patience=bayesian_patience,
-            n_trials=n_trials_bayesian,
-            prefix=prefix,
-            stage_name="Bayesian search",
             refit=False,
+            stage_name="Stage 2",
             distance_cache=scoring_distance_cache,
-            kernel_weight_center=best_random_params["kernel_weights"],
-            kernel_weight_logit_radius=bayesian_weight_logit_radius,
             cached_scoring_backend=cached_scoring_backend,
             pytorch_device=pytorch_device,
             pytorch_devices=pytorch_devices,
             pytorch_candidate_batch_size=pytorch_candidate_batch_size,
-            bayesian_batch_size=bayesian_batch_size,
         )
-        time_bayes_end:float = perf_counter()
-        time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
+        time_stage2_end:float = perf_counter()
+        time_log.info(f"Stage 2 completed in {time_dif(time_stage2_start, time_stage2_end)}.")
+
+        if n_iter_stage3 > 0:
+            stage2_top_params = _top_candidate_params(
+                stage2,
+                fraction=top_k_fraction,
+                min_candidates=top_k_min_candidates,
+            )
+            stage3_alpha_bounds = _top_k_log_bounds(
+                stage2_top_params,
+                lambda params: params[f"{prefix}alpha"],
+                legal_bounds=alpha_bounds,
+                padding_decades=top_k_padding_decades,
+            )
+            stage3_gamma_bounds = [
+                _top_k_log_bounds(
+                    stage2_top_params,
+                    lambda params, component_index=component_index: (
+                        params[f"{prefix}gammas"][component_index]
+                    ),
+                    legal_bounds=component_gamma_bounds[component_index],
+                    padding_decades=top_k_padding_decades,
+                )
+                for component_index in range(n_components)
+            ]
+            stage3_weight_distribution = None
+            if n_terms > 1:
+                stage3_weight_distribution = SimplexWeightDistribution(
+                    n_terms,
+                    center=_average_kernel_weights(
+                        stage2_top_params,
+                        key=f"{prefix}kernel_weights",
+                        n_components=n_terms,
+                    ),
+                    concentration=stage3_weight_concentration,
+                )
+
+            logger.warning(
+                "Beginning Stage 3 top-k alpha/gamma refinement with centered "
+                f"simplex weights. [{n_iter_stage3} iterations]"
+            )
+            time_stage3_start:float = perf_counter()
+            stage3 = _fit_search(
+                estimator,
+                X,
+                y,
+                journal=journal,
+                param_distributions=make_param_distributions(
+                    n_components,
+                    n_terms=n_terms,
+                    alpha_bounds=stage3_alpha_bounds,
+                    gamma_bounds=stage3_gamma_bounds,
+                    kernel_weight_bounds=kernel_weight_bounds,
+                    prefix=prefix,
+                    kernel_weight_distribution=stage3_weight_distribution,
+                ),
+                n_iter=n_iter_stage3,
+                scoring=scoring,
+                cv=cv,
+                random_state=random_state,
+                n_jobs=n_jobs,
+                blas_threads=random_search_blas_threads,
+                refit=False,
+                stage_name="Stage 3",
+                distance_cache=scoring_distance_cache,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+                pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+            )
+            time_stage3_end:float = perf_counter()
+            time_log.info(f"Stage 3 completed in {time_dif(time_stage3_start, time_stage3_end)}.")
+            stage3_timing_label = "Training: Stage III"
+        else:
+            logger.warning("Skipping Stage 3 because n_iter_stage3 is 0.")
+            time_stage3_start = 0.0
+            time_stage3_end = 0.0
+            stage3 = None
+            stage3_timing_label = "Training: Stage III (Skipped)"
+
+        best_random_stage = _best_search_stage([stage1, stage2, stage3])
+        final_params = _complete_prefixed_params_from_search(
+            best_random_stage,
+            prefix=prefix,
+            n_components=n_components,
+        )
 
         timings = [
             (time_cache_start, time_cache_end, cache_timing_label),
             (time_stage1_start, time_stage1_end, "Training: Stage I"),
             (time_stage2_start, time_stage2_end, "Training: Stage II"),
             (time_stage3_start, time_stage3_end, stage3_timing_label),
-            (time_bayes_start , time_bayes_end , "Training: Stage IV"),
+            (0., 0., "Training: Stage IV (Skipped)"),
         ]
 
-    selected_stage = _best_search_stage(
-        [
-            stage
-            for stage in (stage1, stage2, stage3, bayesian_stage)
-            if stage is not None
-        ]
-    )
-    final_params = _complete_prefixed_params_from_search(
-        selected_stage,
-        prefix=prefix,
-        n_components=n_components,
-    )
-    if refit:
-        distance_cache = None
-        scoring_distance_cache = None
-        _release_cached_scoring_memory(
-            cached_scoring_backend=cached_scoring_backend,
+        random_result = StagedRandomSearchResult(
+            stage1=stage1,
+            stage2=stage2,
+            stage3=stage3,
+            final_params=final_params,
+            timings=timings
         )
-    final_estimator = _fit_final_estimator_from_stage(
-        selected_stage,
-        estimator,
-        X,
-        y,
-        final_params=final_params,
-        refit=refit,
-    )
-    logger.info(
-        "Selected %s as final model with CV score %.6g.",
-        getattr(selected_stage, "stage_name", "Bayesian search"),
-        selected_stage.best_score_,
-    )
+        log_random_search_improvements(random_result, scoring=scoring, logger=logger)
 
-    return StagedRandomSearchResult(
-        stage1=stage1,
-        stage2=stage2,
-        stage3=stage3,
-        final_params=final_params,
-        bayesian_stage=bayesian_stage,
-        timings=timings,
-        final_estimator_=final_estimator,
-    )
+        bayesian_stage = None
+        if n_trials_bayesian is not None and n_trials_bayesian > 0:
+            best_random_params = _complete_unprefixed_params_from_search(
+                best_random_stage,
+                n_components=n_components,
+            )
+            bayesian_alpha_bounds = _narrow_log_bounds_around(
+                best_random_params["alpha"],
+                alpha_bounds,
+                bayesian_refine_decades,
+            )
+            bayesian_gamma_bounds = [
+                _narrow_log_bounds_around(gamma, legal_bounds, bayesian_refine_decades)
+                for gamma, legal_bounds in zip(
+                    best_random_params["gammas"],
+                    component_gamma_bounds,
+                )
+            ]
+
+            logger.warning(
+                "Now entering final stage: local Bayesian search over all "
+                f"hyperparameters. [{n_trials_bayesian} iterations]"
+            )
+            time_bayes_start:float = perf_counter()
+            bayesian_stage = fit_bayesian_search(
+                estimator,
+                X,
+                y,
+                n_components=n_components,
+                alpha_bounds=bayesian_alpha_bounds,
+                gamma_bounds=bayesian_gamma_bounds,
+                kernel_weight_bounds=kernel_weight_bounds,
+                initial_params=final_params,
+                journal=journal,
+                sampler_options=sampler_options,
+                min_delta_absolute=bayesian_min_delta_absolute,
+                min_delta_relative=bayesian_min_delta_relative,
+                scoring=scoring,
+                cv=cv,
+                random_state=random_state,
+                n_jobs=n_jobs,
+                blas_threads=random_search_blas_threads,
+                timeout=bayesian_timeout,
+                patience=bayesian_patience,
+                n_trials=n_trials_bayesian,
+                prefix=prefix,
+                stage_name="Bayesian search",
+                refit=False,
+                distance_cache=scoring_distance_cache,
+                kernel_weight_center=best_random_params["kernel_weights"],
+                kernel_weight_logit_radius=bayesian_weight_logit_radius,
+                cached_scoring_backend=cached_scoring_backend,
+                pytorch_device=pytorch_device,
+                pytorch_devices=pytorch_devices,
+                pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+                bayesian_batch_size=bayesian_batch_size,
+            )
+            time_bayes_end:float = perf_counter()
+            time_log.info(f"Final stage completed in {time_dif(time_bayes_start, time_bayes_end)}.")
+
+            timings = [
+                (time_cache_start, time_cache_end, cache_timing_label),
+                (time_stage1_start, time_stage1_end, "Training: Stage I"),
+                (time_stage2_start, time_stage2_end, "Training: Stage II"),
+                (time_stage3_start, time_stage3_end, stage3_timing_label),
+                (time_bayes_start , time_bayes_end , "Training: Stage IV"),
+            ]
+
+        selected_stage = _best_search_stage(
+            [
+                stage
+                for stage in (stage1, stage2, stage3, bayesian_stage)
+                if stage is not None
+            ]
+        )
+        final_params = _complete_prefixed_params_from_search(
+            selected_stage,
+            prefix=prefix,
+            n_components=n_components,
+        )
+        if refit:
+            distance_cache = None
+            scoring_distance_cache = None
+            _release_cached_scoring_memory(
+                cached_scoring_backend=cached_scoring_backend,
+            )
+        final_estimator = _fit_final_estimator_from_stage(
+            selected_stage,
+            estimator,
+            X,
+            y,
+            final_params=final_params,
+            refit=refit,
+        )
+        logger.info(
+            "Selected %s as final model with CV score %.6g.",
+            getattr(selected_stage, "stage_name", "Bayesian search"),
+            selected_stage.best_score_,
+        )
+
+        evidence = journal.finish(selected={"stage": getattr(selected_stage, "stage_name", "Bayesian search"),
+                                             "score": float(selected_stage.best_score_), "params": final_params}) if journal is not None else None
+        return StagedRandomSearchResult(
+            search_evidence_=evidence,
+            stage1=stage1,
+            stage2=stage2,
+            stage3=stage3,
+            final_params=final_params,
+            bayesian_stage=bayesian_stage,
+            timings=timings,
+            final_estimator_=final_estimator,
+        )
 
 
-def _fit_search(
+def _fit_search(estimator, X, y, *, journal=None, **kwargs):
+    stage = None
+    if journal is not None:
+        distributions = kwargs["param_distributions"]
+        n_components = len(next(v.bounds for v in distributions.values() if hasattr(v, "bounds")))
+        stage = journal.stage(kwargs["stage_name"], requested_trials=kwargs["n_iter"],
+                              bounds={k: describe_distribution(v) for k, v in distributions.items()},
+                              estimator=estimator, n_components=n_components)
+    try:
+        result = _fit_search_impl(estimator, X, y, stage_recorder=stage, **kwargs)
+    except Exception as exc:
+        if stage is not None:
+            stage.finish(status="failed", error={"type": type(exc).__name__, "message": str(exc)})
+        raise
+    if stage is not None:
+        stage.finish(stop_reason="trial_limit")
+    return result
+
+
+def _fit_search_impl(
     estimator,
     X,
     y,
@@ -1402,6 +1488,7 @@ def _fit_search(
     blas_threads: int | None = 1,
     refit=True,
     stage_name: str = "Random search",
+    stage_recorder=None,
     distance_cache=None,
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
@@ -1421,6 +1508,7 @@ def _fit_search(
             n_jobs=n_jobs,
             refit=refit,
             stage_name=stage_name,
+            stage_recorder=stage_recorder,
         )
 
     return _fit_cached_random_search(
@@ -1436,6 +1524,7 @@ def _fit_search(
         blas_threads=blas_threads,
         refit=refit,
         stage_name=stage_name,
+        stage_recorder=stage_recorder,
         distance_cache=distance_cache,
         cached_scoring_backend=cached_scoring_backend,
         pytorch_device=pytorch_device,
@@ -1457,6 +1546,7 @@ def _fit_random_search(
     n_jobs=None,
     refit=True,
     stage_name: str = "Random search",
+    stage_recorder=None,
 ) -> RandomizedSearchCV:
     if not param_distributions:
         raise ValueError("param_distributions must contain at least one parameter.")
@@ -1472,7 +1562,13 @@ def _fit_random_search(
         refit=refit,
     )
     search.stage_name = stage_name
+    started = perf_counter()
     search.fit(X, y)
+    if stage_recorder is not None:
+        scores = np.column_stack([search.cv_results_[f"split{i}_test_score"]
+                                  for i in range(search.n_splits_)])
+        stage_recorder.random_batch(search.cv_results_["params"], scores,
+                                    seconds=perf_counter() - started)
     attach_random_search_history(search, scoring=scoring)
     return search
 
@@ -1491,6 +1587,7 @@ def _fit_cached_random_search(
     blas_threads: int | None = 1,
     refit=True,
     stage_name: str = "Random search",
+    stage_recorder=None,
     distance_cache,
     cached_scoring_backend: str = "numpy",
     pytorch_device: str | None = "auto",
@@ -1515,6 +1612,7 @@ def _fit_cached_random_search(
         pytorch_device=pytorch_device,
         pytorch_devices=pytorch_devices,
         pytorch_candidate_batch_size=pytorch_candidate_batch_size,
+        stage_recorder=stage_recorder,
     )
     search.stage_name = stage_name
     search.fit(X, y)
