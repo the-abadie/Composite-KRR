@@ -120,6 +120,8 @@ def bayesian_search_history(study, *, scoring) -> list[dict]:
     history = []
 
     for trial in study.trials:
+        if trial.user_attrs.get('reused_observation', False):
+            continue
         if trial.value is None:
             continue
 

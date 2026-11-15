@@ -21,6 +21,7 @@ FIELDS = {
     "KRR_BAYESIAN_SEARCH_PATIENCE": "search.bayesian.patience",
     "KRR_BAYESIAN_BATCH_SIZE": "search.bayesian.batch_size",
     "KRR_BAYESIAN_ROUNDS": "search.bayesian.rounds",
+    "KRR_BAYESIAN_REUSE_OBSERVATIONS": "search.bayesian.reuse_observations",
     "KRR_TOP_K_FRACTION": "search.top_k_fraction",
     "KRR_TOP_K_MIN_CANDIDATES": "search.top_k_min_candidates",
     "KRR_GAMMA_PRIOR_MAX_SAMPLES": "search.gamma_prior_max_samples",

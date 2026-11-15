@@ -28,6 +28,7 @@ out the search defaults:
   "bayesian": {
     "trials": 50,
     "rounds": 1,
+    "reuse_observations": false,
     "timeout": null,
     "patience": 25,
     "batch_size": 1,
@@ -65,6 +66,7 @@ null. Changing only `search.seed` leaves ordered outer/CV indices unchanged.
 | `stage3_weight_concentration` | Dirichlet concentration around the top candidates' mean weights. |
 | `bayesian.refine_decades` | Bayesian alpha/gamma range around this run's best random candidate. |
 | `bayesian.rounds` | Divide the total Bayesian trial cap into successive local searches, recentering on the best candidate from this same run. Default 1 preserves the standard search. |
+| `bayesian.reuse_observations` | Let TPE learn from eligible completed CV observations in earlier stages/rounds of this same run, without counting them as new evaluations. Default false. |
 | `bayesian.weight_logit_radius` | Natural-logit radius around the Bayesian weight center. |
 | `bayesian.min_delta_absolute` | Absolute score improvement required to reset meaningful-progress patience. |
 | `bayesian.min_delta_relative` | Relative improvement threshold, multiplied by the absolute anchor score. |
@@ -91,6 +93,26 @@ are not transferred. `timeout` covers the entire Bayesian phase. Bounds, counts,
 stop reasons and scores are recorded per round, and aggregate history keeps
 sequential evaluation indices. A single round retains the original proposal
 sequence, seed, bounds, history naming and stopping behavior.
+
+With `reuse_observations=true`, the engine imports completed observations only
+from the current run's in-memory random-stage and prior-round results. It never
+loads a model or history from another run. Only finite, positive-parameter
+candidates representable inside the current static alpha/gamma/logit box are
+eligible. Excluded counts distinguish invalid scores/parameters, exact zero
+weights that finite logits cannot represent, and points outside the box.
+Softmax's common-offset invariance allows an equivalent logit
+vector to fit the box without changing the observed weights. Imported trials
+retain their exact original canonical parameters and fold scores; they are not
+rescored or counted toward the new-trial budget. The usual counted first center
+evaluation remains in place. TPE startup sees the eligible observed data, while
+patience, cap, progress and plotting count only new evaluations.
+
+`observations_imported` JSONL events retain each eligible source stage/trial,
+canonical and sampler parameters, fold scores and exclusions. These events do
+not increment `n_trials`. Per-round bounds record the actual `sampler_seed`,
+reuse flag and import/exclusion counts. The normal trial history contains each
+computed candidate once, and all computed candidates remain eligible for final
+selection. A new run still starts from scratch even when this option is enabled.
 
 For example, CLI overrides can vary optimizer randomness and refinement width:
 

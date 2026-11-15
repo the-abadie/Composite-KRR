@@ -143,6 +143,7 @@ class TPESamplerConfig(ConfigModel):
 class BayesianConfig(ConfigModel):
     trials: NonnegativeInt = 50
     rounds: PositiveInt = Field(default=1, description="Split the total trial cap across fresh local Bayesian rounds, recentering on this run's incumbent; one preserves the standard search.")
+    reuse_observations: bool = Field(default=False, description="Seed TPE with eligible completed CV observations from earlier stages/rounds of this same run; never imports another run.")
     timeout: PositiveFloat | None = None
     patience: PositiveInt | None = 25
     batch_size: NonnegativeInt = 1
@@ -273,6 +274,10 @@ class RunConfig(ConfigModel):
 
     @model_validator(mode="after")
     def consistent_run(self):
+        contribution_trials=self.reporting.contribution_bayesian_trials
+        if (self.reporting.kernel_contributions and contribution_trials is not None
+                and 0 < contribution_trials < self.search.bayesian.rounds):
+            raise ValueError("Contribution Bayesian trial cap must cover the configured number of rounds, or be zero.")
         names = [descriptor.id for descriptor in self.descriptors]
         if len(set(names)) != len(names):
             raise ValueError("Descriptor ids must be unique.")

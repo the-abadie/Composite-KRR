@@ -78,6 +78,7 @@
     "bayesian": {
       "trials": 50,
       "rounds": 1,
+      "reuse_observations": false,
       "timeout": null,
       "patience": 25,
       "batch_size": 1,

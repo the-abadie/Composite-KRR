@@ -1006,6 +1006,7 @@ def staged_random_search_cv(
     stage3_weight_concentration: float = 25.0,
     bayesian_refine_decades: float = 0.3,
     bayesian_rounds: int = 1,
+    bayesian_reuse_observations: bool = False,
     bayesian_weight_logit_radius: float = 1.5,
     bayesian_min_delta_absolute: float = 0.0,
     bayesian_min_delta_relative: float = 0.0,
@@ -1059,6 +1060,7 @@ def staged_random_search_cv(
         "bayesian_patience": bayesian_patience,
         "bayesian_refine_decades": bayesian_refine_decades,
         "bayesian_rounds": bayesian_rounds,
+        "bayesian_reuse_observations": bayesian_reuse_observations,
         "bayesian_weight_logit_radius": bayesian_weight_logit_radius,
         "bayesian_min_delta_absolute": bayesian_min_delta_absolute,
         "bayesian_min_delta_relative": bayesian_min_delta_relative,
@@ -1362,6 +1364,10 @@ def staged_random_search_cv(
                 alpha_bounds=alpha_bounds,
                 gamma_bounds=component_gamma_bounds,
                 rounds=bayesian_rounds,
+                reuse_observations=bayesian_reuse_observations,
+                initial_observations=(_random_stage_observations(
+                    [stage1,stage2,stage3],n_components=n_components,prefix=prefix)
+                    if bayesian_reuse_observations else None),
                 refine_decades=bayesian_refine_decades,
                 initial_score=best_random_stage.best_score_,
                 kernel_weight_bounds=kernel_weight_bounds,
@@ -1449,12 +1455,14 @@ def staged_random_search_cv(
 def _fit_bayesian_rounds(
     estimator, X, y, *, initial_params, initial_score, n_components,
     alpha_bounds, gamma_bounds, rounds, refine_decades, n_trials,
-    prefix, random_state, timeout, stage_name, **kwargs,
+    prefix, random_state, timeout, stage_name,
+    reuse_observations=False, initial_observations=None, **kwargs,
 ):
     """Recenter only within this independent run, under one total trial/time cap."""
     incumbent = dict(initial_params)
     incumbent_score = initial_score
     results = []
+    observations = list(initial_observations or []) if reuse_observations else None
     started = perf_counter()
     for index in range(rounds):
         remaining = None if timeout is None else max(0., timeout - (perf_counter() - started))
@@ -1465,18 +1473,31 @@ def _fit_bayesian_rounds(
         seed = random_state
         if index and isinstance(random_state, int):
             seed = int(np.random.SeedSequence([random_state, index]).generate_state(1)[0])
+        round_name=stage_name if rounds == 1 else f'{stage_name} round {index + 1}/{rounds}'
         result = fit_bayesian_search(
             estimator, X, y, initial_params=incumbent, n_components=n_components,
             alpha_bounds=_narrow_log_bounds_around(center['alpha'], alpha_bounds, refine_decades),
             gamma_bounds=[_narrow_log_bounds_around(g, legal, refine_decades)
                           for g, legal in zip(center['gammas'], gamma_bounds)],
             kernel_weight_center=center['kernel_weights'],
+            observations=observations,
             n_trials=n_trials // rounds + int(index < n_trials % rounds),
             prefix=prefix, random_state=seed, timeout=timeout if rounds == 1 else remaining,
-            stage_name=stage_name if rounds == 1 else f'{stage_name} round {index + 1}/{rounds}',
+            stage_name=round_name,
             **kwargs,
         )
         results.append(result)
+        if observations is not None:
+            imported=sum(bool(t.user_attrs.get('reused_observation')) for t in result.study.trials)
+            for trial in result.study.trials:
+                if trial.user_attrs.get('reused_observation') or trial.value is None:
+                    continue
+                from search_bayes import _params_from_bayesian_trial
+                observations.append(dict(
+                    params=_params_from_bayesian_trial(trial.params,n_components=n_components,
+                                                       n_terms=len(center['kernel_weights'])),
+                    split_scores=trial.user_attrs.get('split_scores',[]),
+                    source_stage=round_name,source_trial=trial.number+1-imported))
         if result.best_score_ > incumbent_score:
             incumbent, incumbent_score = dict(result.best_params_), result.best_score_
     if len(results) == 1:
@@ -1488,6 +1509,21 @@ def _fit_bayesian_rounds(
                                 iteration=len(history) + 1))
     best = max(results, key=lambda r: r.best_score_)
     return replace(best, search_history_=history, round_results_=tuple(results))
+
+
+def _random_stage_observations(stages, *, n_components, prefix):
+    """Retain actual raw candidates and scores; this function has no file input."""
+    observations=[]
+    for stage in stages:
+        if stage is None:
+            continue
+        base=_complete_unprefixed_params_from_estimator(stage.estimator,n_components=n_components)
+        for index,candidate in enumerate(stage.cv_results_['params']):
+            params=base|{k.removeprefix(prefix):v for k,v in candidate.items()}
+            scores=[stage.cv_results_[f'split{i}_test_score'][index] for i in range(stage.n_splits_)]
+            observations.append(dict(params=params,split_scores=scores,
+                source_stage=stage.stage_name,source_trial=index+1))
+    return observations
 
 
 def _fit_search(estimator, X, y, *, journal=None, **kwargs):
