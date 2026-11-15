@@ -130,6 +130,8 @@ def fit_bayesian_search(
         unprefixed_initial_params,
         n_components=n_components,
         n_terms=n_terms,
+        kernel_weight_center=kernel_weight_center,
+        kernel_weight_logit_radius=kernel_weight_logit_radius,
     )
 
     stage_recorder = None if journal is None else journal.stage(
@@ -746,6 +748,8 @@ def _enqueue_initial_bayesian_trial(
     *,
     n_components: int,
     n_terms: int | None = None,
+    kernel_weight_center=None,
+    kernel_weight_logit_radius=None,
 ) -> None:
     n_terms = n_components if n_terms is None else n_terms
     trial_params = {
@@ -755,6 +759,18 @@ def _enqueue_initial_bayesian_trial(
 
     if n_terms > 1:
         logits = _center_logits(params["kernel_weights"], size=n_terms)
+        if kernel_weight_center is not None and kernel_weight_logit_radius is not None:
+            center=_center_logits(kernel_weight_center,size=n_terms)
+            if not np.allclose(logits,center,rtol=0.,atol=1e-12):
+                weights=np.asarray(params['kernel_weights'],dtype=float)
+                if np.any(weights<=0):
+                    raise ValueError('A fixed-box incumbent must have positive representable weights.')
+                logits=np.log(weights);logits-=logits.mean()
+                low=float(np.max(center-kernel_weight_logit_radius-logits))
+                high=float(np.min(center+kernel_weight_logit_radius-logits))
+                if low>high:
+                    raise ValueError('Initial kernel weights cannot be represented in the fixed logit box.')
+                logits+=min(max(0.,low),high)
         trial_params.update(
             {
                 f"kernel_weight_logit_{i}": logits[i]

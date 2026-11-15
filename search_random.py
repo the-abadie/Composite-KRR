@@ -1006,6 +1006,7 @@ def staged_random_search_cv(
     stage3_weight_concentration: float = 25.0,
     bayesian_refine_decades: float = 0.3,
     bayesian_rounds: int = 1,
+    bayesian_recenter: bool = True,
     bayesian_reuse_observations: bool = False,
     bayesian_weight_logit_radius: float = 1.5,
     bayesian_min_delta_absolute: float = 0.0,
@@ -1060,6 +1061,7 @@ def staged_random_search_cv(
         "bayesian_patience": bayesian_patience,
         "bayesian_refine_decades": bayesian_refine_decades,
         "bayesian_rounds": bayesian_rounds,
+        "bayesian_recenter": bayesian_recenter,
         "bayesian_reuse_observations": bayesian_reuse_observations,
         "bayesian_weight_logit_radius": bayesian_weight_logit_radius,
         "bayesian_min_delta_absolute": bayesian_min_delta_absolute,
@@ -1364,6 +1366,7 @@ def staged_random_search_cv(
                 alpha_bounds=alpha_bounds,
                 gamma_bounds=component_gamma_bounds,
                 rounds=bayesian_rounds,
+                recenter=bayesian_recenter,
                 reuse_observations=bayesian_reuse_observations,
                 initial_observations=(_random_stage_observations(
                     [stage1,stage2,stage3],n_components=n_components,prefix=prefix)
@@ -1456,7 +1459,7 @@ def _fit_bayesian_rounds(
     estimator, X, y, *, initial_params, initial_score, n_components,
     alpha_bounds, gamma_bounds, rounds, refine_decades, n_trials,
     prefix, random_state, timeout, stage_name,
-    reuse_observations=False, initial_observations=None, **kwargs,
+    recenter=True, reuse_observations=False, initial_observations=None, **kwargs,
 ):
     """Recenter only within this independent run, under one total trial/time cap."""
     incumbent = dict(initial_params)
@@ -1469,7 +1472,7 @@ def _fit_bayesian_rounds(
         # Always permit the first call to preserve the legacy timeout path.
         if index and remaining is not None and remaining <= 0:
             break
-        center = {k.removeprefix(prefix): v for k, v in incumbent.items()}
+        center = {k.removeprefix(prefix): v for k, v in (incumbent if recenter else initial_params).items()}
         seed = random_state
         if index and isinstance(random_state, int):
             seed = int(np.random.SeedSequence([random_state, index]).generate_state(1)[0])

@@ -28,6 +28,7 @@ out the search defaults:
   "bayesian": {
     "trials": 50,
     "rounds": 1,
+    "recenter": true,
     "reuse_observations": false,
     "timeout": null,
     "patience": 25,
@@ -66,6 +67,7 @@ null. Changing only `search.seed` leaves ordered outer/CV indices unchanged.
 | `stage3_weight_concentration` | Dirichlet concentration around the top candidates' mean weights. |
 | `bayesian.refine_decades` | Bayesian alpha/gamma range around this run's best random candidate. |
 | `bayesian.rounds` | Divide the total Bayesian trial cap into successive local searches, recentering on the best candidate from this same run. Default 1 preserves the standard search. |
+| `bayesian.recenter` | True moves each new round's box to the incumbent. False keeps the original numeric alpha/gamma/logit box while restarting the sampler and enqueuing the current incumbent. Default true. |
 | `bayesian.reuse_observations` | Let TPE learn from eligible completed CV observations in earlier stages/rounds of this same run, without counting them as new evaluations. Default false. |
 | `bayesian.weight_logit_radius` | Natural-logit radius around the Bayesian weight center. |
 | `bayesian.min_delta_absolute` | Absolute score improvement required to reset meaningful-progress patience. |
@@ -93,6 +95,11 @@ are not transferred. `timeout` covers the entire Bayesian phase. Bounds, counts,
 stop reasons and scores are recorded per round, and aggregate history keeps
 sequential evaluation indices. A single round retains the original proposal
 sequence, seed, bounds, history naming and stopping behavior.
+
+For a fixed-box restart control, set `rounds > 1` and `recenter=false`. This
+retains the same derived sampler seeds and new-evaluation budget as moving
+rounds. All boxes stay equal to the first round's actual numeric box, while the
+current best is still enqueued and all earlier candidates remain eligible.
 
 With `reuse_observations=true`, the engine imports completed observations only
 from the current run's in-memory random-stage and prior-round results. It never

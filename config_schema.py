@@ -142,7 +142,8 @@ class TPESamplerConfig(ConfigModel):
 
 class BayesianConfig(ConfigModel):
     trials: NonnegativeInt = 50
-    rounds: PositiveInt = Field(default=1, description="Split the total trial cap across fresh local Bayesian rounds, recentering on this run's incumbent; one preserves the standard search.")
+    rounds: PositiveInt = Field(default=1, description="Split the total trial cap across fresh local Bayesian rounds; one preserves the standard search.")
+    recenter: bool = Field(default=True, description="Move each new round's search box to the current-run incumbent. False restarts samplers in the original fixed box.")
     reuse_observations: bool = Field(default=False, description="Seed TPE with eligible completed CV observations from earlier stages/rounds of this same run; never imports another run.")
     timeout: PositiveFloat | None = None
     patience: PositiveInt | None = 25

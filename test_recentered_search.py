@@ -8,12 +8,41 @@ from unittest.mock import patch
 import numpy as np
 
 from config_schema import BayesianConfig
-from search_bayes import BayesianSearchResult
+from search_bayes import BayesianSearchResult, fit_bayesian_search
 from search_random import _fit_bayesian_rounds, staged_random_search_cv
 import test_search_evidence as fixture_module
 
 
 class RecenteredSearchTests(unittest.TestCase):
+    def test_fixed_box_keeps_an_improved_incumbent_without_moving_bounds(self):
+        start={'alpha':1.,'gammas':[1.],'kernel_weights':[1.]};calls=[]
+        def fake(*args,**kwargs):
+            calls.append(kwargs)
+            params=start|{'alpha':2. if len(calls)==1 else 3.}
+            return BayesianSearchResult(None,None,params,-1.,np.array([-1.]*3),[])
+        with patch('search_random.fit_bayesian_search',side_effect=fake):
+            _fit_bayesian_rounds(None,None,None,initial_params=start,initial_score=-2.,
+                n_components=1,alpha_bounds=(1e-9,100.),gamma_bounds=[(1e-9,100.)],
+                rounds=2,recenter=False,refine_decades=1.,n_trials=4,prefix='',random_state=12,
+                timeout=None,stage_name='Bayesian search')
+        self.assertEqual([c['alpha_bounds'] for c in calls],[(.1,10.)]*2)
+        self.assertEqual([c['initial_params']['alpha'] for c in calls],[1.,2.])
+
+    def test_fixed_box_enqueue_uses_an_equivalent_in_bounds_logit_gauge(self):
+        fixture=fixture_module.SearchEvidenceTests();fixture.setUp()
+        weights=np.exp([1.,1.,-1.]);weights/=weights.sum()
+        result=fit_bayesian_search(fixture.estimator(),fixture.X,fixture.y,n_components=2,
+            alpha_bounds=(1e-6,.1),gamma_bounds=[(.1,10.),(.1,10.)],kernel_weight_bounds=(0.,1.),
+            initial_params={'regressor__alpha':.01,'regressor__gammas':[1.,1.],
+                            'regressor__kernel_weights':weights},scoring='neg_mean_absolute_error',
+            cv=fixture.cv,n_trials=1,prefix='regressor__',refit=False,random_state=1,
+            kernel_weight_center=[1/3]*3,kernel_weight_logit_radius=1.)
+        params=result.study.trials[0].params
+        logits=np.array([params[f'kernel_weight_logit_{i}'] for i in range(3)])
+        self.assertTrue(np.all(logits>=-1.) and np.all(logits<=1.))
+        actual=np.exp(logits-logits.max());actual/=actual.sum()
+        np.testing.assert_allclose(actual,weights,rtol=1e-13,atol=1e-13)
+
     def test_budget_seeds_and_incumbent_survives_a_worse_round(self):
         start={'alpha':1.,'gammas':[1.], 'kernel_weights':[1.]}
         options=dict(initial_params=start,initial_score=-10.,n_components=1,
