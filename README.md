@@ -12,6 +12,12 @@ Python package for implementing Kernel Ridge Regression with multiple kernels.
 
 ## Search controls and evidence
 
+The default structured search uses random stages 200/200/50 and four 50-trial
+recentered Bayesian rounds (650 evaluations total), with 0.6-decade local
+alpha/gamma radius, weight-logit radius 3, multivariate TPE and eligible same-run
+observation reuse. Each fit starts from scratch. Explicit configs override these
+defaults; reproduce historical runs with their complete saved configs and sources.
+
 All runs save numerical trial parameters, fold scores, adaptive bounds and timing
 with an independent optimizer-seed option. Search widths, TPE settings and
 meaningful-progress patience are configurable. See [search controls and saved

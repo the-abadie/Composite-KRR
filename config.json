@@ -71,24 +71,24 @@
       100.0
     ],
     "random": {
-      "stage1": 75,
-      "stage2": 75,
-      "stage3": 0
+      "stage1": 200,
+      "stage2": 200,
+      "stage3": 50
     },
     "bayesian": {
-      "trials": 50,
-      "rounds": 1,
+      "trials": 200,
+      "rounds": 4,
       "recenter": true,
-      "reuse_observations": false,
+      "reuse_observations": true,
       "timeout": null,
-      "patience": 25,
+      "patience": 75,
       "batch_size": 1,
-      "refine_decades": 0.3,
-      "weight_logit_radius": 1.5,
+      "refine_decades": 0.6,
+      "weight_logit_radius": 3.0,
       "min_delta_absolute": 0.0,
       "min_delta_relative": 0.0,
       "sampler": {
-        "multivariate": false,
+        "multivariate": true,
         "group": false,
         "n_startup_trials": 10,
         "n_ei_candidates": 24,

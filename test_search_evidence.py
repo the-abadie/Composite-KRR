@@ -76,7 +76,7 @@ class SearchEvidenceTests(unittest.TestCase):
             self.assertAlmostEqual(summary['selected']['score'], result.best_score_)
             self.assertEqual(summary['history_sha256'], hashlib.sha256((Path(directory) / 'search_history.jsonl').read_bytes()).hexdigest())
             self.assertEqual(len(summary['stages']), 4)
-            self.assertEqual(summary['settings']['sampler']['multivariate'], False)
+            self.assertEqual(summary['settings']['sampler']['multivariate'], True)
             with self.assertRaises(FileExistsError):
                 staged_random_search_cv(self.estimator(), self.X, self.y,
                                        search_output_dir=directory, **self.options())
@@ -196,7 +196,7 @@ class SearchEvidenceTests(unittest.TestCase):
         for change in ({'search.seed': True}, {'search.seed': -1}, {'search.gamma_prior_decades': 0.},
             {'search.refine_decades': float('inf')}, {'search.bayesian.weight_logit_radius': -1.},
             {'search.bayesian.min_delta_relative': -.1}, {'search.history_batch_size': 0},
-            {'search.bayesian.sampler.group': True}, {'search.bayesian.sampler.typo': True}):
+            {'search.bayesian.sampler.group': True, 'search.bayesian.sampler.multivariate': False}, {'search.bayesian.sampler.typo': True}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 base.with_overrides(change)
 
@@ -213,7 +213,7 @@ class SearchEvidenceTests(unittest.TestCase):
                     'target': {'path': str(root / 'y.npy')},
                     'split': {'mode': 'random', 'n_train': 18, 'n_folds': 3},
                     'search': {'seed': seed, 'history_batch_size': 2,
-                        'random': {'stage1': 3, 'stage2': 2}, 'bayesian': {'trials': 2}},
+                        'random': {'stage1': 3, 'stage2': 2}, 'bayesian': {'trials': 2, 'rounds': 1}},
                     'execution': {'n_jobs': 1, 'distance_cache': {'n_jobs': 1}},
                     'output': {'directory': str(output)}, 'verbosity': 0})
                 run(config)

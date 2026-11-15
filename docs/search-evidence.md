@@ -1,8 +1,13 @@
 # Search controls and trial evidence
 
 Every normal configured run saves its numerical search evidence automatically.
-Existing search budgets, bounds, proposal distributions and stopping defaults are
-preserved. New runs start independently; the evidence files are not a resumable
+The structured defaults now use the confirmed 650-evaluation search: random
+200/200/50 followed by four recentered 50-trial Bayesian rounds, broader local
+bounds, multivariate TPE and same-run observation reuse. This recipe was adopted
+after the QM7b/QM7/small-Matbench optimizer study on 2026-11-15. Explicit config
+values and frozen historical sources remain unchanged. When reproducing an older
+run, use its full saved configuration and captured engine rather than filling
+omitted fields from today's defaults. New runs start independently; the evidence files are not a resumable
 optimizer checkpoint and are never imported from another model.
 
 ## Configuration
@@ -24,21 +29,21 @@ out the search defaults:
   "top_k_min_candidates": 5,
   "top_k_padding_decades": 0.5,
   "stage3_weight_concentration": 25.0,
-  "random": {"stage1": 75, "stage2": 75, "stage3": 0},
+  "random": {"stage1": 200, "stage2": 200, "stage3": 50},
   "bayesian": {
-    "trials": 50,
-    "rounds": 1,
+    "trials": 200,
+    "rounds": 4,
     "recenter": true,
-    "reuse_observations": false,
+    "reuse_observations": true,
     "timeout": null,
-    "patience": 25,
+    "patience": 75,
     "batch_size": 1,
-    "refine_decades": 0.3,
-    "weight_logit_radius": 1.5,
+    "refine_decades": 0.6,
+    "weight_logit_radius": 3.0,
     "min_delta_absolute": 0.0,
     "min_delta_relative": 0.0,
     "sampler": {
-      "multivariate": false,
+      "multivariate": true,
       "group": false,
       "n_startup_trials": 10,
       "n_ei_candidates": 24,
@@ -66,9 +71,9 @@ null. Changing only `search.seed` leaves ordered outer/CV indices unchanged.
 | `top_k_padding_decades` | Padding around Stage 3 top-candidate log ranges. |
 | `stage3_weight_concentration` | Dirichlet concentration around the top candidates' mean weights. |
 | `bayesian.refine_decades` | Bayesian alpha/gamma range around this run's best random candidate. |
-| `bayesian.rounds` | Divide the total Bayesian trial cap into successive local searches, recentering on the best candidate from this same run. Default 1 preserves the standard search. |
+| `bayesian.rounds` | Divide the total Bayesian trial cap into successive local searches, recentering on the best candidate from this same run. Default 4; set 1 for a single local search. |
 | `bayesian.recenter` | True moves each new round's box to the incumbent. False keeps the original numeric alpha/gamma/logit box while restarting the sampler and enqueuing the current incumbent. Default true. |
-| `bayesian.reuse_observations` | Let TPE learn from eligible completed CV observations in earlier stages/rounds of this same run, without counting them as new evaluations. Default false. |
+| `bayesian.reuse_observations` | Let TPE learn from eligible completed CV observations in earlier stages/rounds of this same run, without counting them as new evaluations. Default true. |
 | `bayesian.weight_logit_radius` | Natural-logit radius around the Bayesian weight center. |
 | `bayesian.min_delta_absolute` | Absolute score improvement required to reset meaningful-progress patience. |
 | `bayesian.min_delta_relative` | Relative improvement threshold, multiplied by the absolute anchor score. |

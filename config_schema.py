@@ -118,13 +118,13 @@ class ModelConfig(ConfigModel):
 
 
 class RandomSearchConfig(ConfigModel):
-    stage1: PositiveInt = 75
-    stage2: PositiveInt = 75
-    stage3: NonnegativeInt = 0
+    stage1: PositiveInt = 200
+    stage2: PositiveInt = 200
+    stage3: NonnegativeInt = 50
 
 
 class TPESamplerConfig(ConfigModel):
-    multivariate: bool = False
+    multivariate: bool = True
     group: bool = False
     n_startup_trials: NonnegativeInt = 10
     n_ei_candidates: PositiveInt = 24
@@ -141,15 +141,15 @@ class TPESamplerConfig(ConfigModel):
 
 
 class BayesianConfig(ConfigModel):
-    trials: NonnegativeInt = 50
-    rounds: PositiveInt = Field(default=1, description="Split the total trial cap across fresh local Bayesian rounds; one preserves the standard search.")
+    trials: NonnegativeInt = 200
+    rounds: PositiveInt = Field(default=4, description="Split the total trial cap across fresh local Bayesian rounds; one reproduces the historical single-box search.")
     recenter: bool = Field(default=True, description="Move each new round's search box to the current-run incumbent. False restarts samplers in the original fixed box.")
-    reuse_observations: bool = Field(default=False, description="Seed TPE with eligible completed CV observations from earlier stages/rounds of this same run; never imports another run.")
+    reuse_observations: bool = Field(default=True, description="Seed TPE with eligible completed CV observations from earlier stages/rounds of this same run; never imports another run.")
     timeout: PositiveFloat | None = None
-    patience: PositiveInt | None = 25
+    patience: PositiveInt | None = 75
     batch_size: NonnegativeInt = 1
-    refine_decades: PositiveFloat = 0.3
-    weight_logit_radius: PositiveFloat = 1.5
+    refine_decades: PositiveFloat = 0.6
+    weight_logit_radius: PositiveFloat = 3.0
     min_delta_absolute: NonnegativeFloat = 0.0
     min_delta_relative: NonnegativeFloat = 0.0
     sampler: TPESamplerConfig = Field(default_factory=TPESamplerConfig)

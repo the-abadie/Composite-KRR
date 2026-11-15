@@ -27,6 +27,28 @@ class KRRConfigTests(unittest.TestCase):
                 "search": {"random": {"stage1": 1, "stage2": 1}, "bayesian": {"trials": 0}},
                 "execution": {"n_jobs": 1, "distance_cache": {"n_jobs": 1}}}
 
+    def test_confirmed_search_defaults_match_template_and_explicit_old_recipe(self):
+        data = self.sample()
+        data.pop("search")
+        cfg = KRRConfig.from_mapping(data)
+        search = cfg.spec.search.model_dump(mode="json")
+        self.assertEqual(search["random"], {"stage1": 200, "stage2": 200, "stage3": 50})
+        bayes = search["bayesian"]
+        self.assertEqual((bayes["trials"], bayes["rounds"], bayes["patience"]), (200, 4, 75))
+        self.assertEqual((bayes["refine_decades"], bayes["weight_logit_radius"]), (.6, 3.))
+        self.assertTrue(bayes["recenter"] and bayes["reuse_observations"] and bayes["sampler"]["multivariate"])
+        self.assertEqual(template()["search"], search)
+        bundled = KRRConfig.load(ROOT / "config.json")
+        self.assertEqual(bundled.spec.search.model_dump(mode="json"), search)
+        old = cfg.with_overrides({"search.random": {"stage1": 75, "stage2": 75, "stage3": 0},
+            "search.bayesian.trials": 50, "search.bayesian.rounds": 1,
+            "search.bayesian.refine_decades": .3, "search.bayesian.weight_logit_radius": 1.5,
+            "search.bayesian.reuse_observations": False, "search.bayesian.sampler.multivariate": False,
+            "search.bayesian.patience": 25})
+        self.assertEqual(old.spec.search.bayesian.rounds, 1)
+        self.assertFalse(old.spec.search.bayesian.reuse_observations)
+        self.assertEqual(old.spec.search.random.stage1, 75)
+
     def test_defaults_hash_schema_and_no_shared_state(self):
         first = KRRConfig.from_mapping(self.sample())
         second = KRRConfig.from_mapping(json.loads(first.canonical_json()))
