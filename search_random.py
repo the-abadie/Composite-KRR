@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import nullcontext
 from search_evidence import SearchJournal, describe_distribution
 import gc
@@ -1005,6 +1005,7 @@ def staged_random_search_cv(
     top_k_padding_decades: float = 0.5,
     stage3_weight_concentration: float = 25.0,
     bayesian_refine_decades: float = 0.3,
+    bayesian_rounds: int = 1,
     bayesian_weight_logit_radius: float = 1.5,
     bayesian_min_delta_absolute: float = 0.0,
     bayesian_min_delta_relative: float = 0.0,
@@ -1038,6 +1039,10 @@ def staged_random_search_cv(
 
     if type(history_batch_size) is not int or history_batch_size <= 0:
         raise ValueError("history_batch_size must be a positive integer.")
+    if type(bayesian_rounds) is not int or bayesian_rounds <= 0:
+        raise ValueError("bayesian_rounds must be a positive integer.")
+    if n_trials_bayesian and bayesian_rounds > n_trials_bayesian:
+        raise ValueError("Bayesian rounds cannot exceed the positive total trial cap.")
     from config_schema import TPESamplerConfig
     sampler_options = TPESamplerConfig.model_validate(sampler_options or {}).model_dump()
     settings = {
@@ -1053,6 +1058,7 @@ def staged_random_search_cv(
         "bayesian_trials": n_trials_bayesian, "bayesian_timeout": bayesian_timeout,
         "bayesian_patience": bayesian_patience,
         "bayesian_refine_decades": bayesian_refine_decades,
+        "bayesian_rounds": bayesian_rounds,
         "bayesian_weight_logit_radius": bayesian_weight_logit_radius,
         "bayesian_min_delta_absolute": bayesian_min_delta_absolute,
         "bayesian_min_delta_relative": bayesian_min_delta_relative,
@@ -1343,35 +1349,21 @@ def staged_random_search_cv(
 
         bayesian_stage = None
         if n_trials_bayesian is not None and n_trials_bayesian > 0:
-            best_random_params = _complete_unprefixed_params_from_search(
-                best_random_stage,
-                n_components=n_components,
-            )
-            bayesian_alpha_bounds = _narrow_log_bounds_around(
-                best_random_params["alpha"],
-                alpha_bounds,
-                bayesian_refine_decades,
-            )
-            bayesian_gamma_bounds = [
-                _narrow_log_bounds_around(gamma, legal_bounds, bayesian_refine_decades)
-                for gamma, legal_bounds in zip(
-                    best_random_params["gammas"],
-                    component_gamma_bounds,
-                )
-            ]
-
             logger.warning(
                 "Now entering final stage: local Bayesian search over all "
                 f"hyperparameters. [{n_trials_bayesian} iterations]"
             )
             time_bayes_start:float = perf_counter()
-            bayesian_stage = fit_bayesian_search(
+            bayesian_stage = _fit_bayesian_rounds(
                 estimator,
                 X,
                 y,
                 n_components=n_components,
-                alpha_bounds=bayesian_alpha_bounds,
-                gamma_bounds=bayesian_gamma_bounds,
+                alpha_bounds=alpha_bounds,
+                gamma_bounds=component_gamma_bounds,
+                rounds=bayesian_rounds,
+                refine_decades=bayesian_refine_decades,
+                initial_score=best_random_stage.best_score_,
                 kernel_weight_bounds=kernel_weight_bounds,
                 initial_params=final_params,
                 journal=journal,
@@ -1390,7 +1382,6 @@ def staged_random_search_cv(
                 stage_name="Bayesian search",
                 refit=False,
                 distance_cache=scoring_distance_cache,
-                kernel_weight_center=best_random_params["kernel_weights"],
                 kernel_weight_logit_radius=bayesian_weight_logit_radius,
                 cached_scoring_backend=cached_scoring_backend,
                 pytorch_device=pytorch_device,
@@ -1453,6 +1444,50 @@ def staged_random_search_cv(
             timings=timings,
             final_estimator_=final_estimator,
         )
+
+
+def _fit_bayesian_rounds(
+    estimator, X, y, *, initial_params, initial_score, n_components,
+    alpha_bounds, gamma_bounds, rounds, refine_decades, n_trials,
+    prefix, random_state, timeout, stage_name, **kwargs,
+):
+    """Recenter only within this independent run, under one total trial/time cap."""
+    incumbent = dict(initial_params)
+    incumbent_score = initial_score
+    results = []
+    started = perf_counter()
+    for index in range(rounds):
+        remaining = None if timeout is None else max(0., timeout - (perf_counter() - started))
+        # Always permit the first call to preserve the legacy timeout path.
+        if index and remaining is not None and remaining <= 0:
+            break
+        center = {k.removeprefix(prefix): v for k, v in incumbent.items()}
+        seed = random_state
+        if index and isinstance(random_state, int):
+            seed = int(np.random.SeedSequence([random_state, index]).generate_state(1)[0])
+        result = fit_bayesian_search(
+            estimator, X, y, initial_params=incumbent, n_components=n_components,
+            alpha_bounds=_narrow_log_bounds_around(center['alpha'], alpha_bounds, refine_decades),
+            gamma_bounds=[_narrow_log_bounds_around(g, legal, refine_decades)
+                          for g, legal in zip(center['gammas'], gamma_bounds)],
+            kernel_weight_center=center['kernel_weights'],
+            n_trials=n_trials // rounds + int(index < n_trials % rounds),
+            prefix=prefix, random_state=seed, timeout=timeout if rounds == 1 else remaining,
+            stage_name=stage_name if rounds == 1 else f'{stage_name} round {index + 1}/{rounds}',
+            **kwargs,
+        )
+        results.append(result)
+        if result.best_score_ > incumbent_score:
+            incumbent, incumbent_score = dict(result.best_params_), result.best_score_
+    if len(results) == 1:
+        return results[0]
+    history = []
+    for index, result in enumerate(results, start=1):
+        for record in result.search_history_:
+            history.append(dict(record, round=index, round_iteration=record['iteration'],
+                                iteration=len(history) + 1))
+    best = max(results, key=lambda r: r.best_score_)
+    return replace(best, search_history_=history, round_results_=tuple(results))
 
 
 def _fit_search(estimator, X, y, *, journal=None, **kwargs):

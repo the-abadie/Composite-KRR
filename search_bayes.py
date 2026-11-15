@@ -37,6 +37,7 @@ class BayesianSearchResult:
     best_split_scores_: np.ndarray
     search_history_: list[dict]
     estimator: object | None = None
+    round_results_: tuple = ()
 
 
 def fit_bayesian_search(

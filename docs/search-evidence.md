@@ -27,6 +27,7 @@ out the search defaults:
   "random": {"stage1": 75, "stage2": 75, "stage3": 0},
   "bayesian": {
     "trials": 50,
+    "rounds": 1,
     "timeout": null,
     "patience": 25,
     "batch_size": 1,
@@ -63,6 +64,7 @@ null. Changing only `search.seed` leaves ordered outer/CV indices unchanged.
 | `top_k_padding_decades` | Padding around Stage 3 top-candidate log ranges. |
 | `stage3_weight_concentration` | Dirichlet concentration around the top candidates' mean weights. |
 | `bayesian.refine_decades` | Bayesian alpha/gamma range around this run's best random candidate. |
+| `bayesian.rounds` | Divide the total Bayesian trial cap into successive local searches, recentering on the best candidate from this same run. Default 1 preserves the standard search. |
 | `bayesian.weight_logit_radius` | Natural-logit radius around the Bayesian weight center. |
 | `bayesian.min_delta_absolute` | Absolute score improvement required to reset meaningful-progress patience. |
 | `bayesian.min_delta_relative` | Relative improvement threshold, multiplied by the absolute anchor score. |
@@ -76,6 +78,19 @@ meaningful anchor. The exact best-scoring model is always retained, even when it
 gain is too small to reset patience. Zero tolerances preserve the previous
 stopping rule. A batched Bayesian search finishes the already evaluated batch
 before stopping.
+
+When `bayesian.rounds > 1`, the total `trials` budget is divided as evenly as
+possible (earlier rounds receive any remainder). Each round has a fresh TPE
+study, with a deterministic seed derived from `search.seed` after round 1, and
+reevaluates its current center as its first counted trial. No observations or
+fitted parameters are imported from other runs. Alpha and gamma boxes are
+recentered within the original legal bounds; weight-logit boxes are recentered
+on the same incumbent. All earlier candidates remain eligible for final model
+selection. Patience resets per round; unused patience-stopped trial allocations
+are not transferred. `timeout` covers the entire Bayesian phase. Bounds, counts,
+stop reasons and scores are recorded per round, and aggregate history keeps
+sequential evaluation indices. A single round retains the original proposal
+sequence, seed, bounds, history naming and stopping behavior.
 
 For example, CLI overrides can vary optimizer randomness and refinement width:
 

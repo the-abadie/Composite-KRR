@@ -142,6 +142,7 @@ class TPESamplerConfig(ConfigModel):
 
 class BayesianConfig(ConfigModel):
     trials: NonnegativeInt = 50
+    rounds: PositiveInt = Field(default=1, description="Split the total trial cap across fresh local Bayesian rounds, recentering on this run's incumbent; one preserves the standard search.")
     timeout: PositiveFloat | None = None
     patience: PositiveInt | None = 25
     batch_size: NonnegativeInt = 1
@@ -150,6 +151,12 @@ class BayesianConfig(ConfigModel):
     min_delta_absolute: NonnegativeFloat = 0.0
     min_delta_relative: NonnegativeFloat = 0.0
     sampler: TPESamplerConfig = Field(default_factory=TPESamplerConfig)
+
+    @model_validator(mode="after")
+    def valid_round_budget(self):
+        if self.trials and self.rounds > self.trials:
+            raise ValueError("Bayesian rounds cannot exceed the positive total trial cap.")
+        return self
 
 
 class SearchConfig(ConfigModel):
