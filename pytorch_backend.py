@@ -865,10 +865,14 @@ def _inverse_transform_tensor_pytorch(transformer, values):
     if class_name == "StandardScaler":
         return _inverse_standard_scaler_pytorch(transformer, values)
 
-    if class_name == "AsinhIQRTransformer":
+    if class_name in {"AsinhIQRTransformer", "SignedLogIQRTransformer"}:
         torch = require_torch()
         scale = torch.as_tensor(transformer.scale_, dtype=values.dtype, device=values.device)
-        return torch.sinh(values) * scale
+        out = (torch.sinh(values) if class_name == "AsinhIQRTransformer" else
+               torch.sign(values) * torch.expm1(torch.abs(values))) * scale
+        if transformer.center:
+            out = out + torch.as_tensor(transformer.center_, dtype=values.dtype, device=values.device)
+        return out
 
     if class_name == "PowerTransformer":
         return _inverse_power_transformer_pytorch(transformer, values)
@@ -946,6 +950,10 @@ def _inverse_function_transformer_pytorch(transformer, values):
         return values
     if func_name == "_negate":
         return -values
+    if func_name == "_signed_square":
+        return torch.sign(values) * torch.square(values)
+    if func_name == "_cube":
+        return torch.pow(values, 3)
     if inverse_func is np.exp or func_name == "exp":
         return torch.exp(values)
     if inverse_func is np.expm1 or func_name == "expm1":

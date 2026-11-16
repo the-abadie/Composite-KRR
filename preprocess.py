@@ -23,8 +23,23 @@ def _negate(x):
     return -x
 
 
-class AsinhIQRTransformer(TransformerMixin, BaseEstimator):
-    """Apply asinh(y / training IQR), without centering the physical target."""
+def _signed_sqrt(x):
+    return np.sign(x) * np.sqrt(np.abs(x))
+
+
+def _signed_square(x):
+    return np.sign(x) * np.square(x)
+
+
+def _cube(x):
+    return np.power(x, 3)
+
+
+class _IQRTargetTransformer(TransformerMixin, BaseEstimator):
+    """Fit column-wise target scale and optional median on training rows only."""
+
+    def __init__(self, *, center=False):
+        self.center = center
 
     def fit(self, X, y=None):
         X = validate_data(self, X, dtype=np.float64)
@@ -34,19 +49,45 @@ class AsinhIQRTransformer(TransformerMixin, BaseEstimator):
         self.scale_ = np.where(self.iqr_ > 0, self.iqr_, np.where(std > 0, std, 1.))
         self.scale_source_ = np.where(self.iqr_ > 0, "iqr", np.where(std > 0, "std", "unit"))
         if not np.isfinite(self.scale_).all():
-            raise ValueError("Asinh target scale must be finite")
+            raise ValueError("IQR target scale must be finite")
+        self.center_ = np.median(X, axis=0) if self.center else np.zeros(X.shape[1])
         return self
+
+
+class AsinhIQRTransformer(_IQRTargetTransformer):
+    """Apply asinh((y - optional training median) / training IQR)."""
 
     def transform(self, X):
         check_is_fitted(self, "scale_")
         X = validate_data(self, X, reset=False, dtype=np.float64)
+        if self.center:
+            X = X - self.center_
         return np.arcsinh(X / self.scale_)
 
     def inverse_transform(self, X):
         check_is_fitted(self, "scale_")
         X = validate_data(self, X, reset=False, dtype=np.float64)
         with np.errstate(over="ignore"):
-            return np.sinh(X) * self.scale_
+            result = np.sinh(X) * self.scale_
+        return result + self.center_ if self.center else result
+
+
+class SignedLogIQRTransformer(_IQRTargetTransformer):
+    """Signed log1p with a training-only IQR scale."""
+
+    def transform(self, X):
+        check_is_fitted(self, "scale_")
+        X = validate_data(self, X, reset=False, dtype=np.float64)
+        if self.center:
+            X = X - self.center_
+        return np.sign(X) * np.log1p(np.abs(X) / self.scale_)
+
+    def inverse_transform(self, X):
+        check_is_fitted(self, "scale_")
+        X = validate_data(self, X, reset=False, dtype=np.float64)
+        with np.errstate(over="ignore"):
+            result = np.sign(X) * np.expm1(np.abs(X)) * self.scale_
+        return result + self.center_ if self.center else result
 
 
 class SpatialDCT(TransformerMixin, BaseEstimator):
@@ -116,6 +157,16 @@ def descriptor_preprocessing(descriptor):
 
 
 def make_target_preprocessor(transform: str):
+    if transform == "signed_sqrt_standard":
+        return Pipeline([("signed_sqrt", FunctionTransformer(_signed_sqrt, inverse_func=_signed_square)),
+                         ("scaler", StandardScaler())])
+    if transform == "cbrt_standard":
+        return Pipeline([("cbrt", FunctionTransformer(np.cbrt, inverse_func=_cube)),
+                         ("scaler", StandardScaler())])
+    if transform == "signed_log_iqr_standard":
+        return Pipeline([("signed_log", SignedLogIQRTransformer()), ("scaler", StandardScaler())])
+    if transform == "asinh_median_iqr_standard":
+        return Pipeline([("asinh", AsinhIQRTransformer(center=True)), ("scaler", StandardScaler())])
     if transform == "asinh_iqr_standard":
         return Pipeline([("asinh", AsinhIQRTransformer()), ("scaler", StandardScaler())])
     if transform in {"negate_log_standard", "negate_boxcox_standard"}:

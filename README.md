@@ -507,6 +507,25 @@ validation and held-out index groups must be disjoint.
 
 ### Target transformations
 
+The following recipes support positive, negative, and zero targets, and apply
+standardization after the named nonlinear operation:
+
+| `target.normalization` | Nonlinear operation | Fitted nonlinear parameters |
+|---|---|---|
+| `signed_sqrt_standard` | `sign(y) * sqrt(abs(y))` | None; inverse `sign(z) * z**2` |
+| `cbrt_standard` | `cbrt(y)` | None; inverse `z**3` |
+| `signed_log_iqr_standard` | `sign(y) * log1p(abs(y) / s)` | Training IQR scale `s`; inverse `s * sign(z) * expm1(abs(z))` |
+| `asinh_median_iqr_standard` | `asinh((y - m) / s)` | Training median `m` and IQR `s`; inverse `m + s * sinh(z)` |
+
+The roots have fixed exponents; no power is fitted or searched. Scaled recipes
+use linear quartiles, with zero-IQR fallback to population standard deviation,
+then 1 for a constant target. Each inner training fold fits all required
+quartiles/medians and the final standardizer independently. The final model
+refits on its outer-training/CV pool. Centering before asinh is a distinct
+nonlinear mapping from the uncentered recipe below. NumPy and CUDA cached
+scoring invert every pipeline step on the original target scale, and final
+metrics retain fitted offsets, scales, scale sources and standardizer state.
+
 `target.normalization = "asinh_iqr_standard"` applies `asinh(y / s)` without
 centering or a sign flip, then standardizes the transformed target. For each
 target column, `s = Q75(y) - Q25(y)` uses NumPy's linear quantile interpolation.
