@@ -56,6 +56,11 @@ def fitted_target_record(transformer):
             scale=transformer._scaler.scale_.tolist())
     elif name == "StandardScaler":
         result.update(mean=transformer.mean_.tolist(), scale=transformer.scale_.tolist())
+    elif name == "AsinhIQRTransformer":
+        result.update(q25=transformer.q25_.tolist(), q75=transformer.q75_.tolist(),
+            iqr=transformer.iqr_.tolist(), scale=transformer.scale_.tolist(),
+            scale_source=transformer.scale_source_.tolist(), quantile_method="linear",
+            function="asinh(y / scale)", inverse_function="scale * sinh(z)", center=False)
     elif name == "FunctionTransformer":
         result.update(function=getattr(transformer.func, "__name__", None),
             inverse_function=getattr(transformer.inverse_func, "__name__", None))
@@ -127,6 +132,12 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
             "fit_scope": "final outer-training/CV pool only",
             "power_parameter_estimation": "marginal maximum likelihood; independently fitted on each CV training fold",
         }
+        if spec.target.normalization == "asinh_iqr_standard":
+            report["target_transform"].pop("power_parameter_estimation")
+            report["target_transform"]["scale_parameter_estimation"] = (
+                "training IQR (linear quartiles), zero-IQR fallback to population std then 1; "
+                "independently fitted on each CV training fold; no parameter search"
+            )
     report["optimizer_seed"] = spec.search.seed if spec.search.seed is not None else spec.seed
     evidence = getattr(search_result, "search_evidence_", None)
     if evidence is not None:

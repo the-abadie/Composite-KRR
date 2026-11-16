@@ -865,6 +865,11 @@ def _inverse_transform_tensor_pytorch(transformer, values):
     if class_name == "StandardScaler":
         return _inverse_standard_scaler_pytorch(transformer, values)
 
+    if class_name == "AsinhIQRTransformer":
+        torch = require_torch()
+        scale = torch.as_tensor(transformer.scale_, dtype=values.dtype, device=values.device)
+        return torch.sinh(values) * scale
+
     if class_name == "PowerTransformer":
         return _inverse_power_transformer_pytorch(transformer, values)
 

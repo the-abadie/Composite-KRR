@@ -23,6 +23,32 @@ def _negate(x):
     return -x
 
 
+class AsinhIQRTransformer(TransformerMixin, BaseEstimator):
+    """Apply asinh(y / training IQR), without centering the physical target."""
+
+    def fit(self, X, y=None):
+        X = validate_data(self, X, dtype=np.float64)
+        self.q25_, self.q75_ = np.quantile(X, [.25, .75], axis=0, method="linear")
+        self.iqr_ = self.q75_ - self.q25_
+        std = X.std(axis=0)
+        self.scale_ = np.where(self.iqr_ > 0, self.iqr_, np.where(std > 0, std, 1.))
+        self.scale_source_ = np.where(self.iqr_ > 0, "iqr", np.where(std > 0, "std", "unit"))
+        if not np.isfinite(self.scale_).all():
+            raise ValueError("Asinh target scale must be finite")
+        return self
+
+    def transform(self, X):
+        check_is_fitted(self, "scale_")
+        X = validate_data(self, X, reset=False, dtype=np.float64)
+        return np.arcsinh(X / self.scale_)
+
+    def inverse_transform(self, X):
+        check_is_fitted(self, "scale_")
+        X = validate_data(self, X, reset=False, dtype=np.float64)
+        with np.errstate(over="ignore"):
+            return np.sinh(X) * self.scale_
+
+
 class SpatialDCT(TransformerMixin, BaseEstimator):
     """Orthogonal spatial transform for consecutive fixed-width channels."""
 
@@ -90,6 +116,8 @@ def descriptor_preprocessing(descriptor):
 
 
 def make_target_preprocessor(transform: str):
+    if transform == "asinh_iqr_standard":
+        return Pipeline([("asinh", AsinhIQRTransformer()), ("scaler", StandardScaler())])
     if transform in {"negate_log_standard", "negate_boxcox_standard"}:
         return Pipeline([
             ("negate", FunctionTransformer(func=_negate, inverse_func=_negate, validate=False)),

@@ -505,7 +505,20 @@ ordinary K-fold CV in which every outer-training sample is validated once.
 Each validation fold must leave at least one training sample. All train,
 validation and held-out index groups must be disjoint.
 
-### Target power transformations
+### Target transformations
+
+`target.normalization = "asinh_iqr_standard"` applies `asinh(y / s)` without
+centering or a sign flip, then standardizes the transformed target. For each
+target column, `s = Q75(y) - Q25(y)` uses NumPy's linear quantile interpolation.
+A zero IQR falls back to the training population standard deviation, then 1
+for a constant target. All parameters are fitted on each inner training fold
+only and refitted on the final outer-training/CV pool; there is no parameter
+search. The inverse is `s * sinh(sigma * prediction + mu)` and supports signed
+targets and zero. Cached NumPy and CUDA scoring evaluate predictions in the
+configured target space. Nonfinite inverse predictions remain ineligible under
+the existing scoring policy; no clipping is applied.
+`run_metrics.json` retains final quartiles, raw IQR, effective scale, fallback
+source, quantile method, and transformed-target mean and standard deviation.
 
 `target.normalization` accepts `boxcox_standard` (strictly positive targets)
 and `yeojohnson_standard` (signed targets and zero), alongside `none`, `standard`,
