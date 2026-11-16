@@ -517,9 +517,9 @@ CV search over powers. `run_metrics.json` retains the final fitted powers and
 scaling statistics. Original-unit scoring inverts both operations.
 
 Cached NumPy and Torch scoring support these transformations. Torch inverts them
-on-device during candidate batches. Out-of-domain inverse predictions remain
-nonfinite and make a candidate ineligible; they are never clipped to manufacture
-valid predictions. Final evaluation still requires finite predictions. No
+on-device during candidate batches, matching sklearn's inverse formulas.
+Nonfinite inverse predictions make a candidate ineligible; predictions are never
+clipped to manufacture valid values. Final evaluation requires finite predictions. No
 automatic target shift or sign change is applied.
 
 For strictly negative physical targets, explicit `negate_log_standard` and

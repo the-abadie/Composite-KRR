@@ -875,7 +875,7 @@ def _inverse_transform_tensor_pytorch(transformer, values):
 
 
 def _inverse_power_transformer_pytorch(transformer, values):
-    """Invert fitted power targets on-device without clipping invalid domains."""
+    """Invert fitted power targets on-device using sklearn's inverse formulas."""
     torch = require_torch()
     if transformer.standardize:
         values = _inverse_standard_scaler_pytorch(transformer._scaler, values)
@@ -891,11 +891,11 @@ def _inverse_power_transformer_pytorch(transformer, values):
             positive = y >= 0
             result[..., column][positive] = (torch.expm1(y[positive])
                 if abs(power) < np.spacing(1.) else
-                torch.expm1(torch.log1p(power * y[positive]) / power))
+                torch.pow(power * y[positive] + 1, 1 / power) - 1)
             other = 2 - power
             result[..., column][~positive] = (-torch.expm1(-y[~positive])
                 if abs(other) < np.spacing(1.) else
-                -torch.expm1(torch.log1p(-other * y[~positive]) / other))
+                1 - torch.pow(-other * y[~positive] + 1, 1 / other))
         else:
             return None
     return result
