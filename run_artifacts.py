@@ -43,6 +43,25 @@ def json_value(value):
     raise TypeError(f"Unsupported JSON value: {type(value)}")
 
 
+def fitted_target_record(transformer):
+    """Record the final transform, including nested sign/power/scaling steps."""
+    name = transformer.__class__.__name__
+    result = {"type": name}
+    if name == "Pipeline":
+        result["steps"] = [dict(name=label, **fitted_target_record(step))
+                           for label, step in transformer.steps]
+    elif name == "PowerTransformer":
+        result.update(method=transformer.method, lambdas=transformer.lambdas_.tolist(),
+            standardize=transformer.standardize, mean=transformer._scaler.mean_.tolist(),
+            scale=transformer._scaler.scale_.tolist())
+    elif name == "StandardScaler":
+        result.update(mean=transformer.mean_.tolist(), scale=transformer.scale_.tolist())
+    elif name == "FunctionTransformer":
+        result.update(function=getattr(transformer.func, "__name__", None),
+            inverse_function=getattr(transformer.inverse_func, "__name__", None))
+    return result
+
+
 def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                      test_summary, *, elapsed_seconds, training_seconds, target_names=None,
                      warmup=None, stage_timings=None, kernel_alignment=None):
@@ -101,16 +120,12 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                              "y_predictions.npy", "y_true.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy")}}
     report["search_config"] = spec.search.model_dump(mode="json")
     transformer = getattr(getattr(search_result, "best_estimator_", None), "transformer_", None)
-    if transformer is not None and transformer.__class__.__name__ == "PowerTransformer":
+    if transformer is not None:
         report["target_transform"] = {
             "normalization": spec.target.normalization,
-            "method": transformer.method,
-            "lambdas": transformer.lambdas_.tolist(),
-            "standardize": transformer.standardize,
-            "mean": transformer._scaler.mean_.tolist(),
-            "scale": transformer._scaler.scale_.tolist(),
+            **fitted_target_record(transformer),
             "fit_scope": "final outer-training/CV pool only",
-            "parameter_estimation": "marginal maximum likelihood; independently fitted on each CV training fold",
+            "power_parameter_estimation": "marginal maximum likelihood; independently fitted on each CV training fold",
         }
     report["optimizer_seed"] = spec.search.seed if spec.search.seed is not None else spec.seed
     evidence = getattr(search_result, "search_evidence_", None)

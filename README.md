@@ -522,6 +522,12 @@ nonfinite and make a candidate ineligible; they are never clipped to manufacture
 valid predictions. Final evaluation still requires finite predictions. No
 automatic target shift or sign change is applied.
 
+For strictly negative physical targets, explicit `negate_log_standard` and
+`negate_boxcox_standard` first multiply labels by -1, then apply the positive-only
+transform and standardization. Prediction inverts every step and restores the
+original negative sign before scoring. These modes require strictly negative
+training labels; they do not take absolute values of mixed-sign targets.
+
 Descriptors can apply a fixed spatial DCT after fold-fitted normalization:
 
 ```json

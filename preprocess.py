@@ -19,6 +19,10 @@ def _identity(x):
     return x
 
 
+def _negate(x):
+    return -x
+
+
 class SpatialDCT(TransformerMixin, BaseEstimator):
     """Orthogonal spatial transform for consecutive fixed-width channels."""
 
@@ -86,6 +90,11 @@ def descriptor_preprocessing(descriptor):
 
 
 def make_target_preprocessor(transform: str):
+    if transform in {"negate_log_standard", "negate_boxcox_standard"}:
+        return Pipeline([
+            ("negate", FunctionTransformer(func=_negate, inverse_func=_negate, validate=False)),
+            ("transform", make_target_preprocessor(transform.removeprefix("negate_"))),
+        ])
     if transform in {"boxcox_standard", "yeojohnson_standard"}:
         method = "box-cox" if transform == "boxcox_standard" else "yeo-johnson"
         return PowerTransformer(method=method, standardize=True)

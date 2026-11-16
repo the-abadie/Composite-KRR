@@ -939,6 +939,8 @@ def _inverse_function_transformer_pytorch(transformer, values):
     func_name = getattr(inverse_func, "__name__", "")
     if func_name in {"_identity", "identity"}:
         return values
+    if func_name == "_negate":
+        return -values
     if inverse_func is np.exp or func_name == "exp":
         return torch.exp(values)
     if inverse_func is np.expm1 or func_name == "expm1":

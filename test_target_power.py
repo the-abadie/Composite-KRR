@@ -30,6 +30,10 @@ class TargetPowerTests(unittest.TestCase):
         self.signed = np.column_stack((self.features[:, 0], self.features[:, 1] ** 3))
         self.cv = KFold(3, shuffle=True, random_state=12)
 
+    def cases(self):
+        return (("boxcox_standard", self.positive), ("yeojohnson_standard", self.signed),
+                ("negate_boxcox_standard", -self.positive), ("negate_log_standard", -self.positive))
+
     def estimator(self, name):
         reg = make_composite_krr_regressor(krr_backend="exact", names=["x"],
             kernel_types=["rbf"], normalizations=["standard"], pca_components=None,
@@ -42,7 +46,7 @@ class TargetPowerTests(unittest.TestCase):
             block_size=16, dtype="float64", n_jobs=1, memory_fraction=.8)
 
     def test_schema_standardization_roundtrip_and_domain(self):
-        for name, y in (("boxcox_standard", self.positive), ("yeojohnson_standard", self.signed)):
+        for name, y in self.cases():
             cfg = KRRConfig.from_mapping({"descriptors": [{"id": "x", "path": "x.npy"}],
                 "target": {"path": "y.npy", "normalization": name},
                 "split": {"mode": "random", "n_train": 20}, "output": {"directory": "out"}})
@@ -56,20 +60,27 @@ class TargetPowerTests(unittest.TestCase):
             make_target_preprocessor("boxcox_standard").fit(self.signed)
 
     def test_validation_labels_cannot_fit_power_or_scaling(self):
-        for name, y in (("boxcox_standard", self.positive), ("yeojohnson_standard", self.signed)):
+        for name, y in self.cases():
             estimator = self.estimator(name)
             original = self.cache(estimator, y)
             altered_y = y.copy()
             _, val = next(self.cv.split(self.X))
-            altered_y[val] += 1000
+            altered_y[val] *= 3
             altered = self.cache(estimator, altered_y)
             left, right = original.folds[0].target_transformer, altered.folds[0].target_transformer
+            if name.startswith("negate_"):
+                left, right = left.named_steps["transform"], right.named_steps["transform"]
+            if name == "negate_log_standard":
+                left, right = left.named_steps["scaler"], right.named_steps["scaler"]
+                np.testing.assert_array_equal(left.mean_, right.mean_)
+                np.testing.assert_array_equal(left.scale_, right.scale_)
+                continue
             for a, b in ((left.lambdas_, right.lambdas_),
                          (left._scaler.mean_, right._scaler.mean_), (left._scaler.scale_, right._scaler.scale_)):
                 np.testing.assert_array_equal(a, b)
 
     def test_numpy_cache_matches_independent_sklearn_cv(self):
-        for name, y in (("boxcox_standard", self.positive), ("yeojohnson_standard", self.signed)):
+        for name, y in self.cases():
             estimator = self.estimator(name)
             expected = cross_val_score(clone(estimator), self.X, y, cv=self.cv,
                 scoring="neg_mean_absolute_error", error_score="raise")
@@ -79,7 +90,7 @@ class TargetPowerTests(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "Torch unavailable")
     def test_torch_scores_match_numpy_original_units(self):
-        for name, y in (("boxcox_standard", self.positive), ("yeojohnson_standard", self.signed)):
+        for name, y in self.cases():
             estimator = self.estimator(name)
             cache = self.cache(estimator, y)
             expected = score_estimator_params_from_cache(estimator, {}, cache,
