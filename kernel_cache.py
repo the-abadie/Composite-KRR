@@ -1030,6 +1030,10 @@ def work_buffer_for(
 
 
 def score_predictions(y_true, y_pred, scoring, *, target_transformer=None) -> float:
+    # A power-transform inverse can be undefined for a candidate's predictions.
+    # Keep that candidate ineligible without clipping its scientific predictions.
+    if not np.isfinite(y_pred).all():
+        return float("nan")
     from target_scoring import TransformedTargetScorer
     if isinstance(scoring, TransformedTargetScorer):
         return scoring.score_predictions(y_true, y_pred, target_transformer)

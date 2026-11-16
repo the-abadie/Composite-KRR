@@ -6,7 +6,7 @@ from collections.abc import Mapping
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.preprocessing import FunctionTransformer, PowerTransformer, StandardScaler
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted, validate_data
 from scipy.fft import dct, rfft
@@ -86,6 +86,9 @@ def descriptor_preprocessing(descriptor):
 
 
 def make_target_preprocessor(transform: str):
+    if transform in {"boxcox_standard", "yeojohnson_standard"}:
+        method = "box-cox" if transform == "boxcox_standard" else "yeo-johnson"
+        return PowerTransformer(method=method, standardize=True)
     if transform == "none":
         logger.debug("Target Transform: Identity")
         return FunctionTransformer(

@@ -865,10 +865,40 @@ def _inverse_transform_tensor_pytorch(transformer, values):
     if class_name == "StandardScaler":
         return _inverse_standard_scaler_pytorch(transformer, values)
 
+    if class_name == "PowerTransformer":
+        return _inverse_power_transformer_pytorch(transformer, values)
+
     if class_name == "FunctionTransformer":
         return _inverse_function_transformer_pytorch(transformer, values)
 
     return None
+
+
+def _inverse_power_transformer_pytorch(transformer, values):
+    """Invert fitted power targets on-device without clipping invalid domains."""
+    torch = require_torch()
+    if transformer.standardize:
+        values = _inverse_standard_scaler_pytorch(transformer._scaler, values)
+        if values is None:
+            return None
+    result = torch.empty_like(values)
+    for column, power in enumerate(transformer.lambdas_):
+        y = values[..., column]
+        if transformer.method == "box-cox":
+            result[..., column] = (torch.exp(y) if power == 0 else
+                torch.exp(torch.log1p(power * y) / power))
+        elif transformer.method == "yeo-johnson":
+            positive = y >= 0
+            result[..., column][positive] = (torch.expm1(y[positive])
+                if abs(power) < np.spacing(1.) else
+                torch.expm1(torch.log1p(power * y[positive]) / power))
+            other = 2 - power
+            result[..., column][~positive] = (-torch.expm1(-y[~positive])
+                if abs(other) < np.spacing(1.) else
+                -torch.expm1(torch.log1p(-other * y[~positive]) / other))
+        else:
+            return None
+    return result
 
 
 def _inverse_standard_scaler_pytorch(transformer, values):

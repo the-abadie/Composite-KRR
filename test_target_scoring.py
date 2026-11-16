@@ -95,7 +95,7 @@ class TargetScoringTests(unittest.TestCase):
                 "target": {"path": str(root / "y.npy"), "name": ["first", "second"]},
                 "split": {"mode": "random", "n_train": 16, "n_folds": 2},
                 "search": {"target_space": "transformed", "random": {"stage1": 1, "stage2": 1},
-                           "bayesian": {"trials": 1, "patience": 1}},
+                           "bayesian": {"trials": 1, "rounds": 1, "patience": 1}},
                 "execution": {"n_jobs": 1, "prediction_batch_size": 3, "distance_cache": {"n_jobs": 1}},
                 "output": {"directory": str(root / "output")}, "verbosity": 0})
             run(config)

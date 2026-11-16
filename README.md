@@ -505,6 +505,23 @@ ordinary K-fold CV in which every outer-training sample is validated once.
 Each validation fold must leave at least one training sample. All train,
 validation and held-out index groups must be disjoint.
 
+### Target power transformations
+
+`target.normalization` accepts `boxcox_standard` (strictly positive targets)
+and `yeojohnson_standard` (signed targets and zero), alongside `none`, `standard`,
+`log`, `log1p`, `log_standard`, and `log1p_standard`. Both power transforms fit
+one maximum-likelihood power per target column, followed by zero-mean/unit-variance
+standardization. These parameters use each CV training fold only; the final
+model refits them on the full outer-training/CV pool. There is no additional
+CV search over powers. `run_metrics.json` retains the final fitted powers and
+scaling statistics. Original-unit scoring inverts both operations.
+
+Cached NumPy and Torch scoring support these transformations. Torch inverts them
+on-device during candidate batches. Out-of-domain inverse predictions remain
+nonfinite and make a candidate ineligible; they are never clipped to manufacture
+valid predictions. Final evaluation still requires finite predictions. No
+automatic target shift or sign change is applied.
+
 Descriptors can apply a fixed spatial DCT after fold-fitted normalization:
 
 ```json

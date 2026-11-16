@@ -100,6 +100,18 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
                             ("fold_val_idx.npy", "test_idx.npy", "validation_folds.npz",
                              "y_predictions.npy", "y_true.npy", "alpha.npy", "gammas.npy", "kernel_weights.npy")}}
     report["search_config"] = spec.search.model_dump(mode="json")
+    transformer = getattr(getattr(search_result, "best_estimator_", None), "transformer_", None)
+    if transformer is not None and transformer.__class__.__name__ == "PowerTransformer":
+        report["target_transform"] = {
+            "normalization": spec.target.normalization,
+            "method": transformer.method,
+            "lambdas": transformer.lambdas_.tolist(),
+            "standardize": transformer.standardize,
+            "mean": transformer._scaler.mean_.tolist(),
+            "scale": transformer._scaler.scale_.tolist(),
+            "fit_scope": "final outer-training/CV pool only",
+            "parameter_estimation": "marginal maximum likelihood; independently fitted on each CV training fold",
+        }
     report["optimizer_seed"] = spec.search.seed if spec.search.seed is not None else spec.seed
     evidence = getattr(search_result, "search_evidence_", None)
     if evidence is not None:
