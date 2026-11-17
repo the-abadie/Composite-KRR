@@ -261,6 +261,28 @@ class ProductKernelTests(unittest.TestCase):
         tiled = pairwise_self_lp_distance_pytorch(x, p=1, device=x.device, dtype=x.dtype)
         torch.testing.assert_close(tiled, dense, rtol=0, atol=0)
 
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional")
+    def test_torch_training_gram_matches_dense_products(self):
+        import torch
+        from class_CompositeKRR import KernelComponent
+        from torch_exact_krr import _training_kernel_torch
+
+        rng = np.random.default_rng(12)
+        blocks = [rng.normal(size=(515, width)) for width in (7, 2, 4, 5)]
+        for block in blocks:
+            block[513] = block[0]
+        components = [KernelComponent(name, gamma, weight, kind) for name, gamma, weight, kind
+                      in zip("abcd", self.gammas, self.weights[:4], self.types)]
+        for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+            for dtype, tol in [(torch.float64, 2e-12), (torch.float32, 5e-6)]:
+                tensors = [torch.as_tensor(block, dtype=dtype, device=device) for block in blocks]
+                for products in [[], self.products]:
+                    weights = self.weights[:len(components) + len(products)]
+                    expected = explicit_kernel(blocks, blocks, self.types, self.gammas, weights, products)
+                    gram = _training_kernel_torch(tensors, components, torch=torch, kernel_products=products,
+                                                  product_weights=weights[len(components):])
+                    assert_allclose(gram.cpu().numpy(), expected, atol=tol, rtol=tol)
+
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
     def test_host_distance_blocks_keep_batched_product_scores(self):
         import torch

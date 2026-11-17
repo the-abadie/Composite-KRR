@@ -65,16 +65,14 @@ class CompositeTorchKRR:
         y_tensor = torch.as_tensor(y_matrix, dtype=torch_dtype, device=torch_device)
 
         with torch.no_grad():
-            K = _composite_kernel_torch(
-                X_train_tensors,
+            K = _training_kernel_torch(
                 X_train_tensors,
                 self.components,
                 kernel_products=self.kernel_products,
                 product_weights=self.product_weights,
                 torch=torch,
             )
-            diag = torch.arange(K.shape[0], device=torch_device)
-            K[diag, diag] = K[diag, diag] + float(self.alpha)
+            K.diagonal().add_(float(self.alpha))
             factor, info = torch.linalg.cholesky_ex(
                 K,
                 upper=False,
@@ -128,6 +126,7 @@ class CompositeTorchKRR:
                     torch=torch,
                 )
                 batch_pred = K_eval @ self.dual_coef_tensor_
+                del K_eval
                 y_pred[start:stop] = batch_pred.detach().cpu().numpy()
 
         return maybe_squeeze_single_target(y_pred, squeeze=self.target_was_1d_)
@@ -169,6 +168,28 @@ class CompositeTorchKRR:
         return prepared_blocks
 
 
+def _training_kernel_torch(blocks, components, *, torch, kernel_products, product_weights):
+    options = dict(torch=torch, kernel_products=kernel_products, product_weights=product_weights)
+    n = blocks[0].shape[0]
+    rows = 256
+    if not blocks[0].is_cuda or n <= rows:
+        return _composite_kernel_torch(blocks, blocks, components, **options)
+
+    # Every base kernel, and therefore every weighted product, is symmetric.
+    # Keep product factors only for this slab, then mirror its off-diagonal part.
+    gram = blocks[0].new_empty((n, n))
+    for start in range(0, n, rows):
+        stop = min(start + rows, n)
+        slab = _composite_kernel_torch(
+            [block[start:stop] for block in blocks], [block[:stop] for block in blocks],
+            components, **options,
+        )
+        gram[start:stop, :stop] = slab
+        gram[:start, start:stop] = slab[:, :start].T
+        del slab
+    return gram
+
+
 def _composite_kernel_torch(
     X_left_blocks,
     X_right_blocks,
@@ -178,8 +199,14 @@ def _composite_kernel_torch(
     kernel_products=(),
     product_weights=(),
 ):
+    bases = _base_kernels_torch(X_left_blocks, X_right_blocks, components, torch=torch)
+    if not kernel_products:
+        total = next(bases).mul_(float(components[0].kernel_weight))
+        for component in components[1:]:
+            total.add_(next(bases), alpha=float(component.kernel_weight))
+        return total
     return mix_kernel_terms(
-        _base_kernels_torch(X_left_blocks, X_right_blocks, components, torch=torch),
+        bases,
         [c.kernel_weight for c in components] + list(product_weights),
         kernel_products,
     )
@@ -197,13 +224,12 @@ def _base_kernels_torch(X_left_blocks, X_right_blocks, components, *, torch):
                 f"counts: {X_left.shape[1]} and {X_right.shape[1]}."
             )
 
-        K_component = _kernel_component_torch(
+        yield _kernel_component_torch(
             X_left,
             X_right,
             component=component,
             torch=torch,
         )
-        yield K_component
 
 
 def _kernel_component_torch(X_left, X_right, *, component: KernelComponent, torch):
@@ -224,7 +250,7 @@ def _kernel_component_torch(X_left, X_right, *, component: KernelComponent, torc
 
 def _squared_euclidean_distance(X_left, X_right, *, torch):
     left_norms = torch.sum(X_left * X_left, dim=1, keepdim=True)
-    right_norms = torch.sum(X_right * X_right, dim=1).reshape(1, -1)
+    right_norms = left_norms.T if X_left is X_right else torch.sum(X_right * X_right, dim=1)[None, :]
     distances = X_left @ X_right.T
     distances.mul_(-2.0)
     distances.add_(left_norms)
