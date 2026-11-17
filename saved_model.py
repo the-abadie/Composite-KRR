@@ -61,8 +61,8 @@ class SavedExactModel:
         self.coefficients = coef
         self.backend = backend
         if backend == "pytorch":
-            from torch_exact_krr import _resolve_torch
-            self.torch, self.torch_dtype, self.device = _resolve_torch(dtype=self.dtype, device=device)
+            from composite_krr.torch_runtime import resolve_torch
+            self.torch, self.torch_dtype, self.device = resolve_torch(dtype=self.dtype, device=device)
             self.train_tensors = [self.torch.as_tensor(b, dtype=self.torch_dtype, device=self.device)
                                   for b in self.train_blocks]
             self.coef_tensor = self.torch.as_tensor(coef, dtype=self.torch_dtype, device=self.device)

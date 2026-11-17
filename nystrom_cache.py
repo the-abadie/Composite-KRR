@@ -558,7 +558,7 @@ def nystrom_cache_to_pytorch(
     devices=None,
     dtype=None,
 ) -> NystromDistanceCache:
-    from pytorch_backend import require_torch, resolve_torch_devices, resolve_torch_dtype
+    from composite_krr.torch_runtime import require_torch, resolve_torch_devices, resolve_torch_dtype
 
     torch = require_torch()
     resolved_devices = resolve_torch_devices(
@@ -601,7 +601,7 @@ def nystrom_cache_to_pytorch(
 
 
 def _nystrom_fold_to_pytorch(fold, *, torch, device, dtype):
-    from pytorch_backend import as_torch_tensor
+    from composite_krr.torch_runtime import as_torch_tensor
 
     y_validation = as_target_matrix(fold.y_validation, dtype=float)
     return NystromFoldDistanceCache(
@@ -1005,7 +1005,7 @@ def predict_fold_from_nystrom_cache_pytorch(
     kernel_types: list[str],
     kernel_products=(),
 ) -> NDArray:
-    from pytorch_backend import require_torch
+    from composite_krr.torch_runtime import require_torch
 
     torch = require_torch()
     device = fold.y_train_transformed.device
@@ -1068,7 +1068,7 @@ def _nystrom_normalizer_pytorch(
     kernel_products=(),
     eigenvalue_floor: float,
 ):
-    from pytorch_backend import require_torch
+    from composite_krr.torch_runtime import require_torch
 
     torch = require_torch()
     W = _composite_kernel_from_distance_batch_pytorch(
@@ -1123,7 +1123,7 @@ def _warm_up_torch_linalg_for_cache(cache: NystromDistanceCache) -> None:
 
 
 def _warm_up_torch_linalg(device, dtype) -> None:
-    from pytorch_backend import require_torch
+    from composite_krr.torch_runtime import require_torch
 
     torch = require_torch()
     torch_device = torch.device(device)

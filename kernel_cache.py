@@ -132,7 +132,7 @@ def resolve_cache_pytorch_devices(
     if distance_backend != "pytorch":
         return None
 
-    from pytorch_backend import require_torch, resolve_torch_devices
+    from composite_krr.torch_runtime import require_torch, resolve_torch_devices
 
     torch = require_torch()
     return resolve_torch_devices(

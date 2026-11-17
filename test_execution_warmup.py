@@ -7,7 +7,7 @@ from runner import warm_up_execution
 class ExecutionWarmupTests(unittest.TestCase):
     def test_cpu_and_disabled_warmup_do_not_import_torch(self):
         from unittest.mock import patch
-        with patch("pytorch_backend.require_torch", side_effect=AssertionError("unexpected torch use")):
+        with patch("composite_krr.torch_runtime.require_torch", side_effect=AssertionError("unexpected torch use")):
             self.assertEqual(warm_up_execution(ExecutionConfig()), {"seconds": 0., "devices": [], "matrix_size": 0})
             config = ExecutionConfig(backend="pytorch")
             self.assertEqual(warm_up_execution(config)["seconds"], 0.)

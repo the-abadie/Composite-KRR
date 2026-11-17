@@ -25,7 +25,7 @@ def warm_up_execution(execution):
     """Initialize CUDA distance/solve operations without consuming random state."""
     if execution.backend != "pytorch" or not execution.torch.warmup_size:
         return {"seconds": 0.0, "devices": [], "matrix_size": 0}
-    from pytorch_backend import require_torch
+    from composite_krr.torch_runtime import require_torch
     torch = require_torch()
     requested = execution.torch.devices or [execution.torch.device or "auto"]
     if requested == "auto":

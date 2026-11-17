@@ -6,6 +6,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from class_CompositeKRR import KernelComponent
+from composite_krr.torch_runtime import resolve_torch as _resolve_torch
 from kernels import distance_spec_for_kernel
 from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters
 from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
@@ -260,12 +261,3 @@ def _squared_euclidean_distance(X_left, X_right, *, torch):
     distances.add_(left_norms)
     distances.add_(right_norms)
     return distances.clamp_(min=0.0)
-
-
-def _resolve_torch(*, dtype, device):
-    from pytorch_backend import require_torch, resolve_torch_device, resolve_torch_dtype
-
-    torch = require_torch()
-    torch_dtype = resolve_torch_dtype(torch, dtype)
-    torch_device = resolve_torch_device(torch, device)
-    return torch, torch_dtype, torch_device

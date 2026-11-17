@@ -12,6 +12,7 @@ from composite_krr.estimator_inputs import (
     resolve_sequence,
     unpack_sample_matrix,
 )
+from composite_krr.torch_runtime import require_torch, resolve_torch
 from kernels import (
     distance_spec_for_kernel,
     pairwise_cross_lp_distance,
@@ -357,7 +358,7 @@ def _fit_nystrom_pytorch(
     eigenvalue_floor: float,
     device,
 ) -> tuple[NDArray, NDArray]:
-    torch, torch_dtype, torch_device = _resolve_torch(dtype=dtype, device=device)
+    torch, torch_dtype, torch_device = resolve_torch(dtype=dtype, device=device)
     landmark_tensors = [
         torch.as_tensor(block, dtype=torch_dtype, device=torch_device)
         for block in landmark_blocks
@@ -431,7 +432,7 @@ def _predict_nystrom_pytorch(
     dtype,
     device,
 ) -> NDArray:
-    torch, torch_dtype, torch_device = _resolve_torch(dtype=dtype, device=device)
+    torch, torch_dtype, torch_device = resolve_torch(dtype=dtype, device=device)
     landmark_tensors = [
         torch.as_tensor(block, dtype=torch_dtype, device=torch_device)
         for block in landmark_blocks
@@ -643,7 +644,7 @@ def torch_exp_scaled(distance, *, gamma, weight):
 
 
 def _nystrom_normalizer_pytorch(W, *, eigenvalue_floor: float):
-    torch = _torch_module()
+    torch = require_torch()
     W = 0.5 * (W + W.T)
     eigenvalues, eigenvectors = torch.linalg.eigh(W)
     positive = eigenvalues[eigenvalues > 0]
@@ -655,21 +656,6 @@ def _nystrom_normalizer_pytorch(W, *, eigenvalue_floor: float):
     eigenvalues = eigenvalues[keep]
     eigenvectors = eigenvectors[:, keep]
     return eigenvectors / torch.sqrt(eigenvalues).reshape(1, -1)
-
-
-def _resolve_torch(*, dtype, device):
-    from pytorch_backend import require_torch, resolve_torch_device, resolve_torch_dtype
-
-    torch = require_torch()
-    torch_device = resolve_torch_device(torch, device)
-    torch_dtype = resolve_torch_dtype(torch, dtype)
-    return torch, torch_dtype, torch_device
-
-
-def _torch_module():
-    from pytorch_backend import require_torch
-
-    return require_torch()
 
 
 def _batch_slices(n_samples: int, batch_size: int):

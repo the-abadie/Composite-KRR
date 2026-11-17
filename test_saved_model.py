@@ -1,4 +1,8 @@
 import pickle
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
 import unittest
 
 import numpy as np
@@ -11,6 +15,22 @@ from composite_krr.estimators import CompositeKRREstimator, CompositeNystromKRRE
 
 
 class SavedModelTests(unittest.TestCase):
+    def test_fixed_parameter_numpy_models_do_not_load_search_plotting_or_torch(self):
+        script = textwrap.dedent("""
+            import sys
+            import numpy as np
+            from composite_krr.estimators import CompositeKRREstimator, CompositeNystromKRREstimator
+
+            x = np.empty((6, 1), dtype=object)
+            x[:, 0] = list(np.arange(6.0).reshape(-1, 1))
+            y = np.arange(6.0)
+            for cls in (CompositeKRREstimator, CompositeNystromKRREstimator):
+                prediction = cls(compute_dtype="float64").fit(x, y).predict(x)
+                assert np.isfinite(prediction).all()
+            assert {"optuna", "matplotlib.pyplot", "torch"}.isdisjoint(sys.modules)
+        """)
+        subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parent, check=True)
+
     def test_historical_estimator_names_in_pickles(self):
         for module, cls in [("search_random", CompositeKRREstimator),
                             ("nystrom_krr", CompositeNystromKRREstimator)]:
