@@ -10,6 +10,8 @@ from sklearn.preprocessing import FunctionTransformer, PowerTransformer, Standar
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted, validate_data
 from scipy.fft import dct, rfft
+from scipy.optimize import minimize_scalar
+from scipy.stats import yeojohnson_llf
 
 
 logger = logging.getLogger("pre-processing")
@@ -33,6 +35,42 @@ def _signed_square(x):
 
 def _cube(x):
     return np.power(x, 3)
+
+
+class BoundedYeoJohnsonTransformer(PowerTransformer):
+    """Yeo–Johnson training MLE on the closed interval [0, 2].
+
+    Bounds constrain the likelihood optimization, not predictions or labels.
+    Inherited fit/transform handling fits standardization after the power and
+    preserves sklearn's constant-column and multi-target behavior.
+    """
+
+    lambda_bounds = (0.0, 2.0)
+
+    def __init__(self, *, standardize=True, copy=True):
+        super().__init__(method="yeo-johnson", standardize=standardize, copy=copy)
+
+    def _yeo_johnson_optimize(self, x):
+        # sklearn's optimizer receives one training column at a time. Retain
+        # its NaN handling; the engine separately requires finite target labels.
+        x = x[~np.isnan(x)]
+
+        def objective(power):
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                score = -float(yeojohnson_llf(power, x))
+            return score if np.isfinite(score) else np.inf
+
+        optimum = minimize_scalar(objective, bounds=self.lambda_bounds,
+                                  method="bounded", options={"xatol": 1e-10})
+        if not optimum.success:
+            raise ValueError("Bounded Yeo-Johnson maximum-likelihood fit did not converge")
+        # A bounded solver samples the open interval: test both endpoints too.
+        candidates = (self.lambda_bounds[0], float(optimum.x), self.lambda_bounds[1])
+        scores = [objective(power) for power in candidates]
+        best = int(np.argmin(scores))
+        if not np.isfinite(scores[best]):
+            raise ValueError("Bounded Yeo-Johnson maximum-likelihood fit is nonfinite")
+        return candidates[best]
 
 
 class _IQRTargetTransformer(TransformerMixin, BaseEstimator):
@@ -174,6 +212,8 @@ def make_target_preprocessor(transform: str):
             ("negate", FunctionTransformer(func=_negate, inverse_func=_negate, validate=False)),
             ("transform", make_target_preprocessor(transform.removeprefix("negate_"))),
         ])
+    if transform == "yeojohnson_bounded_standard":
+        return BoundedYeoJohnsonTransformer(standardize=True)
     if transform in {"boxcox_standard", "yeojohnson_standard"}:
         method = "box-cox" if transform == "boxcox_standard" else "yeo-johnson"
         return PowerTransformer(method=method, standardize=True)

@@ -874,7 +874,7 @@ def _inverse_transform_tensor_pytorch(transformer, values):
             out = out + torch.as_tensor(transformer.center_, dtype=values.dtype, device=values.device)
         return out
 
-    if class_name == "PowerTransformer":
+    if class_name in {"PowerTransformer", "BoundedYeoJohnsonTransformer"}:
         return _inverse_power_transformer_pytorch(transformer, values)
 
     if class_name == "FunctionTransformer":

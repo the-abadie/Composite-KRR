@@ -50,10 +50,12 @@ def fitted_target_record(transformer):
     if name == "Pipeline":
         result["steps"] = [dict(name=label, **fitted_target_record(step))
                            for label, step in transformer.steps]
-    elif name == "PowerTransformer":
+    elif name in {"PowerTransformer", "BoundedYeoJohnsonTransformer"}:
         result.update(method=transformer.method, lambdas=transformer.lambdas_.tolist(),
             standardize=transformer.standardize, mean=transformer._scaler.mean_.tolist(),
             scale=transformer._scaler.scale_.tolist())
+        if name == "BoundedYeoJohnsonTransformer":
+            result["lambda_bounds"] = list(transformer.lambda_bounds)
     elif name == "StandardScaler":
         result.update(mean=transformer.mean_.tolist(), scale=transformer.scale_.tolist())
     elif name in {"AsinhIQRTransformer", "SignedLogIQRTransformer"}:
@@ -137,6 +139,11 @@ def save_run_metrics(spec, search_result, cv, idx_train, idx_test, y_train,
             "fit_scope": "final outer-training/CV pool only",
             "power_parameter_estimation": "marginal maximum likelihood; independently fitted on each CV training fold",
         }
+        if spec.target.normalization == "yeojohnson_bounded_standard":
+            report["target_transform"]["power_parameter_estimation"] = (
+                "marginal maximum likelihood constrained to closed [0, 2], including endpoints; "
+                "independently fitted on each CV training fold"
+            )
         if spec.target.normalization in {"asinh_iqr_standard", "asinh_median_iqr_standard", "signed_log_iqr_standard"}:
             report["target_transform"].pop("power_parameter_estimation")
             report["target_transform"]["scale_parameter_estimation"] = (

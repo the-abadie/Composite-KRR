@@ -548,6 +548,22 @@ model refits them on the full outer-training/CV pool. There is no additional
 CV search over powers. `run_metrics.json` retains the final fitted powers and
 scaling statistics. Original-unit scoring inverts both operations.
 
+`target.normalization = "yeojohnson_bounded_standard"` fits the Yeo–Johnson
+power by marginal maximum likelihood constrained to the **closed [0, 2] interval**,
+including both endpoints, then standardizes. It is a distinct opt-in recipe;
+`yeojohnson_standard` retains its original unconstrained fit. The power and
+standardizer are fitted independently on each inner training fold and on the
+final outer-training/CV pool, without validation/test fitting or power CV search.
+This constrains the likelihood optimization rather than clipping a fitted power,
+predictions, labels or inverse values. For powers in [0, 2], the mathematical
+Yeo–Johnson map covers the entire real line, removing the finite inverse-range
+restriction possible with an unconstrained power. Numerical overflow remains
+subject to the existing nonfinite-prediction policy. Native metrics retain
+`lambda_bounds`, fitted powers and standardization state. NumPy and Torch cached
+scoring use the same fitted transform and evaluate errors in the original units.
+Historical jobs/configs keep their explicit normalization; selecting this option
+requires a fresh model fit rather than replacing a trained model's inverse.
+
 Cached NumPy and Torch scoring support these transformations. Torch inverts them
 on-device during candidate batches, matching sklearn's inverse formulas.
 Nonfinite inverse predictions make a candidate ineligible; predictions are never

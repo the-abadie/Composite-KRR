@@ -67,7 +67,7 @@ class DescriptorConfig(ConfigModel):
 class TargetConfig(ConfigModel):
     path: Text
     name: Text | Annotated[list[Text], Field(min_length=1)] = "target"
-    normalization: Literal["none", "standard", "log", "log1p", "log_standard", "log1p_standard", "boxcox_standard", "yeojohnson_standard", "negate_log_standard", "negate_boxcox_standard", "asinh_iqr_standard", "signed_sqrt_standard", "cbrt_standard", "signed_log_iqr_standard", "asinh_median_iqr_standard"] = "standard"
+    normalization: Literal["none", "standard", "log", "log1p", "log_standard", "log1p_standard", "boxcox_standard", "yeojohnson_standard", "yeojohnson_bounded_standard", "negate_log_standard", "negate_boxcox_standard", "asinh_iqr_standard", "signed_sqrt_standard", "cbrt_standard", "signed_log_iqr_standard", "asinh_median_iqr_standard"] = "standard"
 
 
 class RandomSplit(ConfigModel):
