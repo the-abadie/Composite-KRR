@@ -172,7 +172,11 @@ def _training_kernel_torch(blocks, components, *, torch, kernel_products, produc
     options = dict(torch=torch, kernel_products=kernel_products, product_weights=product_weights)
     n = blocks[0].shape[0]
     rows = 256
-    if not blocks[0].is_cuda or n <= rows:
+    # Pure RBF fits keep their original GEMM shape and rounding, which can
+    # matter when solving an ill-conditioned Gram matrix.
+    if not blocks[0].is_cuda or n <= rows or all(
+        distance_spec_for_kernel(c.kernel_type).kernel_type == "rbf" for c in components
+    ):
         return _composite_kernel_torch(blocks, blocks, components, **options)
 
     # Every base kernel, and therefore every weighted product, is symmetric.
