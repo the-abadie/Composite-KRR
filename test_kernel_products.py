@@ -248,6 +248,30 @@ class ProductKernelTests(unittest.TestCase):
                     self.assertEqual(saved["kernel_products"], [["a", "b"]])
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
+    def test_host_distance_blocks_keep_batched_product_scores(self):
+        import torch
+        from pytorch_backend import distance_cache_to_pytorch, score_candidates_from_cache_pytorch
+
+        for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+            scores = []
+            for storage in ("device", "host"):
+                raw = build_distance_cache(
+                    self.X, self.y, self.cv, names=["a", "b", "c", "d"], kernel_types=self.types,
+                    kernel_products=self.products, normalizations=["standard"] * 4,
+                    distance_backend="pytorch", pytorch_device=device, storage=storage,
+                )
+                cache = distance_cache_to_pytorch(raw, device=device)
+                for fold in cache.folds:
+                    self.assertEqual(fold.y_train_transformed.device.type, device)
+                    for block in fold.train_distances + fold.validation_train_distances:
+                        self.assertEqual(block.device.type, "cpu" if storage == "host" else device)
+                scores.append(score_candidates_from_cache_pytorch(
+                    alphas=[0.1, 0.25], gammas=[self.gammas] * 2, weights=[self.weights] * 2,
+                    cache=cache, scoring="neg_mean_absolute_error", candidate_batch_size=2,
+                ))
+            assert_allclose(scores[0], scores[1], atol=1e-12, rtol=1e-12)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
     def test_torch_predictions_and_candidate_batches_match_numpy(self):
         import torch
         from pytorch_backend import composite_kernel_from_distances_pytorch

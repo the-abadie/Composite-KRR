@@ -230,6 +230,7 @@ def _execute(spec):
         distance_dtype=(spec.execution.distance_cache.dtype or spec.execution.dtype),
         distance_cache_n_jobs=spec.execution.distance_cache.n_jobs,
         distance_cache_memory_fraction=spec.execution.distance_cache.memory_fraction,
+        distance_cache_storage=spec.execution.distance_cache.storage,
         gamma_prior_max_samples=spec.search.gamma_prior_max_samples,
         cached_scoring_backend=spec.execution.backend,
         pytorch_device=spec.execution.torch.device,
@@ -396,6 +397,7 @@ def _execute(spec):
                 "distance_block_size": spec.execution.distance_cache.block_size,
                 "distance_dtype": (spec.execution.distance_cache.dtype or spec.execution.dtype),
                 "distance_cache_n_jobs": spec.execution.distance_cache.n_jobs,
+                "distance_cache_storage": spec.execution.distance_cache.storage,
                 "distance_cache_memory_fraction": (
                     spec.execution.distance_cache.memory_fraction
                 ),

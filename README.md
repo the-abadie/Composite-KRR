@@ -280,6 +280,15 @@ and reused; only factors needed by products are retained. This trades temporary
 kernel memory for reuse. Prediction/Nyström row batches and Torch candidate
 batches bound that temporary memory. Exact training still uses dense matrices.
 
+Exact PyTorch cross-validation keeps fold distances on the scoring device by
+default. When those caches strain VRAM, set `execution.distance_cache.storage`
+to `"host"`. The engine computes each block on the selected device, keeps the
+distances in CPU RAM at the configured precision, and transfers each block back
+when assembling a kernel. Every candidate batch reuses that transfer across its
+candidates. Budget host RAM for all folds and allow for the additional transfer
+time. The dense training kernel, Cholesky factor and any product factors still
+use device memory.
+
 Run the regression checks with `.venv/bin/python -m unittest discover -v`.
 The optional Torch parity test runs on CPU and also CUDA when available; it is
 skipped when Torch is absent.

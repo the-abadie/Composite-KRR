@@ -152,6 +152,8 @@ def from_flat(values: dict[str, Any]) -> dict[str, Any]:
 
 def to_flat(model: RunConfig) -> dict[str, Any]:
     """Compatibility view for existing Python clients; returns a fresh dictionary."""
+    if model.execution.distance_cache.storage == "host":
+        raise ValueError("Host distance-cache storage requires structured configuration.")
     if model.reporting.kernel_alignment != KernelAlignmentConfig():
         raise ValueError("kernel_alignment requires structured configuration; legacy fields cannot represent it")
     if any(d.spatial_dct is not None for d in model.descriptors):

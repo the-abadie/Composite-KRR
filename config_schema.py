@@ -189,6 +189,10 @@ class SearchConfig(ConfigModel):
 
 class DistanceCacheConfig(ConfigModel):
     enabled: bool = True
+    storage: Literal["device", "host"] = Field(
+        default="device", exclude_if=lambda value: value == "device",
+        description="For exact PyTorch CV, host keeps pairwise distances in CPU RAM and streams each block to the scoring device.",
+    )
     block_size: PositiveInt = 2048
     dtype: Literal["float32", "float64"] | None = Field(default=None, description="null inherits execution.dtype.")
     n_jobs: StrictInt | None = -1
@@ -301,6 +305,10 @@ class RunConfig(ConfigModel):
         bounds = self.search.gamma_bounds
         if isinstance(bounds[0], list) and len(bounds) != len(names):
             raise ValueError("Per-descriptor gamma bounds must match the descriptor count.")
+        if self.execution.distance_cache.storage == "host" and (
+            self.execution.backend != "pytorch" or self.model.backend != "exact"
+        ):
+            raise ValueError("Host distance-cache storage requires exact PyTorch KRR.")
         if self.execution.backend == "pytorch" or self.model.backend == "nystrom":
             if any(d.kernel not in {"rbf", "laplacian"} for d in self.descriptors):
                 raise ValueError("PyTorch and Nystrom require rbf or laplacian base kernels.")

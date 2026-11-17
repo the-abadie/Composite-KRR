@@ -199,13 +199,14 @@ def _fold_distance_cache_to_pytorch(
     torch,
 ) -> TorchFoldDistanceCache:
     y_validation = as_target_matrix(fold.y_validation, dtype=float)
+    distance_device = "cpu" if fold.storage == "host" else device
     return TorchFoldDistanceCache(
         fold_id=fold.fold_id,
         train_distances=[
             as_torch_tensor(
                 distance,
                 torch=torch,
-                device=device,
+                device=distance_device,
                 dtype=dtype,
             )
             for distance in fold.train_distances
@@ -214,7 +215,7 @@ def _fold_distance_cache_to_pytorch(
             as_torch_tensor(
                 distance,
                 torch=torch,
-                device=device,
+                device=distance_device,
                 dtype=dtype,
             )
             for distance in fold.validation_train_distances
@@ -275,7 +276,18 @@ def pairwise_self_lp_distance_pytorch(
         return dist
 
     if p == 1:
-        dist = torch.cdist(X, X, p=1)
+        # Each slab covers the lower triangle and its diagonal tile. Mirroring
+        # the rest avoids computing both orientations of wide L1 distances.
+        slab_size = min(256, block_size)
+        if X.is_cuda and 0 < slab_size < n_samples and not X.requires_grad:
+            dist = torch.empty((n_samples, n_samples), dtype=X.dtype, device=X.device)
+            for start in range(0, n_samples, slab_size):
+                stop = min(start + slab_size, n_samples)
+                slab = torch.cdist(X[start:stop], X[:stop], p=1)
+                dist[start:stop, :stop] = slab
+                dist[:start, start:stop] = slab[:, :start].T
+        else:
+            dist = torch.cdist(X, X, p=1)
         dist.fill_diagonal_(0.0)
         return dist
 
@@ -372,6 +384,7 @@ def composite_kernel_from_distances_pytorch(
     weights,
     kernel_types: list[str],
     kernel_products=(),
+    device=None,
 ):
     if not distances:
         raise ValueError("At least one distance matrix is required.")
@@ -380,15 +393,16 @@ def composite_kernel_from_distances_pytorch(
 
     torch = require_torch()
     first_distance = distances[0]
+    device = first_distance.device if device is None else torch.device(device)
     gammas = torch.as_tensor(
         gammas,
         dtype=first_distance.dtype,
-        device=first_distance.device,
+        device=device,
     )
     weights = torch.as_tensor(
         weights,
         dtype=first_distance.dtype,
-        device=first_distance.device,
+        device=device,
     )
 
     single_candidate = gammas.ndim == 1
@@ -409,19 +423,24 @@ def composite_kernel_from_distances_pytorch(
         if distance.shape != first_distance.shape:
             raise ValueError("All distance matrices must have the same shape.")
         distance_spec_for_kernel(kernel_type)
+    # With host storage, transfer each distance only when its term is consumed.
+    blocks = iter(distances) if first_distance.device == device else (
+        block.to(device, non_blocking=True) for block in distances
+    )
     if not products and not torch.is_grad_enabled():
         # Additive inference can reuse one temporary for all component kernels.
-        out = (-gammas[:, 0, None, None] * first_distance).exp_()
+        out = (-gammas[:, 0, None, None] * next(blocks)).exp_()
         out.mul_(weights[:, 0, None, None])
         if len(distances) > 1:
             term = torch.empty_like(out)
-            for i, distance in enumerate(distances[1:], start=1):
+            for i, distance in enumerate(blocks, start=1):
                 torch.mul(-gammas[:, i, None, None], distance, out=term)
                 out.addcmul_(term.exp_(), weights[:, i, None, None])
+                del distance
         return out[0] if single_candidate else out
     out = mix_kernel_terms(
         (torch.exp(-gammas[:, i, None, None] * distance.unsqueeze(0))
-         for i, distance in enumerate(distances)),
+         for i, distance in enumerate(blocks)),
         [weights[:, i, None, None] for i in range(weights.shape[1])],
         products,
     )
@@ -747,6 +766,7 @@ def _predict_batch_from_torch_fold(
 
     K_train = composite_kernel_from_distances_pytorch(
         fold.train_distances,
+        device=alphas_t.device,
         gammas=gammas_t,
         weights=weights_t,
         kernel_types=kernel_types,
@@ -762,6 +782,7 @@ def _predict_batch_from_torch_fold(
 
     K_validation = composite_kernel_from_distances_pytorch(
         fold.validation_train_distances,
+        device=alphas_t.device,
         gammas=gammas_t,
         weights=weights_t,
         kernel_types=kernel_types,

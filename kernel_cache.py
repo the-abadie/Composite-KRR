@@ -52,6 +52,7 @@ class FoldDistanceCache:
     y_validation: NDArray
     target_transformer: object | None
     baseline_validation: NDArray | None = None
+    storage: str = "device"
 
 
 @dataclass(frozen=True)
@@ -186,12 +187,15 @@ def build_distance_cache(
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
     pytorch_devices=None,
+    storage: str = "device",
     kernel_products=None,
     linear_baseline=None,
 ) -> DistanceCache:
     kernel_products = resolve_kernel_products(kernel_products, len(names))
     dtype = np.dtype(dtype)
     distance_backend = normalize_distance_backend(distance_backend)
+    if storage not in {"device", "host"}:
+        raise ValueError("Distance-cache storage must be device or host.")
     X_blocks = unpack_sample_matrix(X, dtype=dtype)
     if linear_baseline is not None and linear_baseline not in names:
         raise ValueError("linear_baseline must name a descriptor block")
@@ -311,6 +315,7 @@ def build_distance_cache(
                 dtype=dtype,
                 use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                 distance_backend=distance_backend,
+                storage=storage,
                 pytorch_device=pytorch_device_for_fold(
                     resolved_pytorch_devices,
                     fold_index,
@@ -345,6 +350,7 @@ def build_distance_cache(
                     dtype=dtype,
                     use_scipy_for_p1_p2=use_scipy_for_p1_p2,
                     distance_backend=distance_backend,
+                    storage=storage,
                     pytorch_device=pytorch_device_for_fold(
                         resolved_pytorch_devices,
                         fold_index,
@@ -367,6 +373,7 @@ def build_distance_cache(
         fold_metadata,
         component_results,
         n_components=len(X_blocks),
+        storage=storage,
     )
 
     cache = DistanceCache(
@@ -438,6 +445,7 @@ def build_component_fold_distance_cache(
     use_scipy_for_p1_p2: bool,
     distance_backend: str = "numpy",
     pytorch_device: str | None = "auto",
+    storage: str = "device",
 ) -> _ComponentFoldDistanceCache:
     preprocessing_started = perf_counter()
     preprocessor = make_data_preprocessor(
@@ -459,6 +467,8 @@ def build_component_fold_distance_cache(
             dtype=dtype,
             device=pytorch_device,
         )
+        if storage == "host":
+            train_distance = train_distance.cpu()
         validation_train_distance = pairwise_cross_lp_distance_pytorch(
             X_validation,
             X_train,
@@ -468,6 +478,8 @@ def build_component_fold_distance_cache(
             dtype=dtype,
             device=pytorch_device,
         )
+        if storage == "host":
+            validation_train_distance = validation_train_distance.cpu()
     else:
         train_distance = pairwise_self_lp_distance(
             X_train,
@@ -500,6 +512,7 @@ def assemble_fold_distance_caches(
     component_results: list[_ComponentFoldDistanceCache],
     *,
     n_components: int,
+    storage: str = "device",
 ) -> list[FoldDistanceCache]:
     result_by_key = {
         (result.fold_index, result.component_index): result
@@ -533,6 +546,7 @@ def assemble_fold_distance_caches(
                 y_validation=metadata.y_validation,
                 target_transformer=metadata.target_transformer,
                 baseline_validation=metadata.baseline_validation,
+                storage=storage,
             )
         )
 
@@ -1085,7 +1099,7 @@ def unpack_sample_matrix(X, dtype: np.dtype | type | str = np.float64) -> list[N
 
     blocks = []
     for block_id in range(X.shape[1]):
-        block = np.stack(X[:, block_id]).astype(dtype)
+        block = np.stack(X[:, block_id]).astype(dtype, copy=False)
         blocks.append(block.reshape(X.shape[0], -1))
 
     return blocks
