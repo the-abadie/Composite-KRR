@@ -1037,12 +1037,16 @@ def score_predictions(y_true, y_pred, scoring, *, target_transformer=None) -> fl
     from target_scoring import TransformedTargetScorer
     if isinstance(scoring, TransformedTargetScorer):
         return scoring.score_predictions(y_true, y_pred, target_transformer)
+    y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
     if isinstance(scoring, str):
+        if scoring == "neg_mean_absolute_error" and np.isfinite(y_true_aligned).all():
+            # Match sklearn's uniform average over outputs, including multi-target fits.
+            per_target = np.mean(np.abs(y_pred_aligned - y_true_aligned), axis=0)
+            return -float(np.mean(per_target))
         scorer = get_scorer(scoring)
     else:
         scorer = scoring
 
-    y_true_aligned, y_pred_aligned = align_targets_for_scoring(y_true, y_pred)
     estimator = _PredictionOnlyRegressor(y_pred_aligned)
     X_dummy = np.zeros((len(y_true_aligned), 1), dtype=float)
     return float(scorer(estimator, X_dummy, y_true_aligned))

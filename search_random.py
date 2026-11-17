@@ -1491,8 +1491,9 @@ def _fit_bayesian_rounds(
         )
         results.append(result)
         if observations is not None:
-            imported=sum(bool(t.user_attrs.get('reused_observation')) for t in result.study.trials)
-            for trial in result.study.trials:
+            trials = result.study.get_trials(deepcopy=False)
+            imported = sum(bool(trial.user_attrs.get("reused_observation")) for trial in trials)
+            for trial in trials:
                 if trial.user_attrs.get('reused_observation') or trial.value is None:
                     continue
                 from search_bayes import _params_from_bayesian_trial

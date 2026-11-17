@@ -220,7 +220,7 @@ def fit_bayesian_search(
     milestones = _progress_milestones(n_trials)
 
     def log_progress(study, trial):
-        completed = len(study.trials) - imported_count
+        completed = trial.number + 1 - imported_count
         if completed in milestones:
             logger.info(
                 f"{stage_name} progress: "
@@ -283,8 +283,9 @@ def fit_bayesian_search(
         )
 
     if stage_recorder is not None:
-        reason = "trial_limit" if len(study.trials) - imported_count >= n_trials else (
-            "patience" if patience is not None and study.trials[-1].number - progress.last_trial >= patience else "timeout")
+        trials = study.get_trials(deepcopy=False)
+        reason = "trial_limit" if len(trials) - imported_count >= n_trials else (
+            "patience" if patience is not None and trials[-1].number - progress.last_trial >= patience else "timeout")
         stage_recorder.finish(stop_reason=reason)
 
     best_params = study.best_trial.user_attrs.get('observed_params') or _params_from_bayesian_trial(
@@ -511,9 +512,9 @@ def _optimize_bayesian_search_batched(
             trial.set_user_attr("timing", {"scope": "bayesian_batch", "batch_wall_seconds": batch_seconds,
                                            "batch_size": len(trials), "amortized_seconds": batch_seconds / len(trials)})
 
-            study.tell(trial, value)
+            completed_trial = study.tell(trial, value)
             if trial_callback is not None:
-                trial_callback(study, next(t for t in study.get_trials(deepcopy=False) if t.number == trial.number))
+                trial_callback(study, completed_trial)
             completed_trials += 1
             _log_batched_progress(
                 stage_name,
@@ -523,7 +524,7 @@ def _optimize_bayesian_search_batched(
             )
             if not stop_requested:
                 stop_requested = _batched_patience_stop_requested(
-                    study,
+                    study, completed_trial,
                     patience=patience,
                     stage_name=stage_name,
                     progress=progress,
@@ -614,6 +615,7 @@ def _log_batched_progress(
 
 def _batched_patience_stop_requested(
     study,
+    latest_trial,
     *,
     patience: int | None,
     stage_name: str,
@@ -621,18 +623,6 @@ def _batched_patience_stop_requested(
     trial_offset=0,
 ) -> bool:
     if patience is None:
-        return False
-
-    completed_trials = [
-        trial
-        for trial in study.trials
-        if trial.state == optuna.trial.TrialState.COMPLETE
-    ]
-    if not completed_trials:
-        return False
-
-    latest_trial = completed_trials[-1]
-    if latest_trial.value is None:
         return False
 
     last_improvement = study.best_trial.number if progress is None else progress.last_trial
