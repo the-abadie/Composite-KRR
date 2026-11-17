@@ -1,5 +1,35 @@
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.spatial.distance import pdist, squareform, cdist
+
+
+@dataclass(frozen=True)
+class KernelDistanceSpec:
+    kernel_type: str
+    p: float
+    squared: bool
+
+
+class UnsupportedDistanceKernelError(ValueError):
+    pass
+
+
+def distance_spec_for_kernel(kernel_type: str) -> KernelDistanceSpec:
+    if not isinstance(kernel_type, str):
+        raise UnsupportedDistanceKernelError(
+            f"Kernel type must be a string, got {type(kernel_type).__name__}."
+        )
+
+    kernel_type = kernel_type.lower()
+    if kernel_type == "rbf":
+        return KernelDistanceSpec(kernel_type=kernel_type, p=2, squared=True)
+    if kernel_type == "laplacian":
+        return KernelDistanceSpec(kernel_type=kernel_type, p=1, squared=False)
+    raise UnsupportedDistanceKernelError(
+        f'Kernel "{kernel_type}" is not supported by the distance cache.'
+    )
+
 
 def pairwise_self_lp_distance(
     X: np.ndarray,

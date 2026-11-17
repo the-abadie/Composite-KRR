@@ -1,5 +1,4 @@
-from search_random import CompositeKRREstimator
-from nystrom_krr import CompositeNystromKRREstimator
+from composite_krr.estimators import CompositeKRREstimator, CompositeNystromKRREstimator
 
 
 def normalize_krr_backend(backend: str) -> str:

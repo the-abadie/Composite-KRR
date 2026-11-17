@@ -9,12 +9,11 @@ from numpy.typing import NDArray
 from threadpoolctl import threadpool_limits
 
 from kernel_mixing import resolve_kernel_products
+from composite_krr.estimator_inputs import resolve_sequence, unpack_sample_matrix
 from kernel_cache import (
     composite_kernel_from_distances,
-    UnsupportedDistanceKernelError,
     array_nbytes,
     available_memory_bytes,
-    distance_spec_for_kernel,
     fit_target_transformer,
     format_nbytes,
     inverse_transform_target,
@@ -22,18 +21,18 @@ from kernel_cache import (
     pytorch_device_for_fold,
     resolve_cache_n_jobs,
     resolve_cache_pytorch_devices,
-    resolve_sequence,
     score_predictions,
-    unpack_sample_matrix,
     validate_distance_cache_memory,
 )
 from kernels import (
+    UnsupportedDistanceKernelError as UnsupportedDistanceKernelError,
+    distance_spec_for_kernel,
     pairwise_cross_lp_distance,
     pairwise_cross_lp_distance_pytorch,
     pairwise_self_lp_distance,
     pairwise_self_lp_distance_pytorch,
 )
-from nystrom_krr import select_landmark_indices
+from composite_krr.estimators.nystrom import select_landmark_indices
 from preprocess import make_data_preprocessor
 from target_utils import as_target_array, as_target_matrix
 

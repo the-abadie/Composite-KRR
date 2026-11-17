@@ -1,3 +1,4 @@
+import pickle
 import unittest
 
 import numpy as np
@@ -6,10 +7,18 @@ from sklearn.compose import TransformedTargetRegressor
 from preprocess import make_target_preprocessor
 from run_config import KRRConfig
 from saved_model import SavedExactModel
-from search_random import CompositeKRREstimator
+from composite_krr.estimators import CompositeKRREstimator, CompositeNystromKRREstimator
 
 
 class SavedModelTests(unittest.TestCase):
+    def test_historical_estimator_names_in_pickles(self):
+        for module, cls in [("search_random", CompositeKRREstimator),
+                            ("nystrom_krr", CompositeNystromKRREstimator)]:
+            with self.subTest(module=module):
+                # Protocol 0 GLOBAL, as written when these modules owned the classes.
+                reference = f"c{module}\n{cls.__name__}\n.".encode("ascii")
+                self.assertIs(pickle.loads(reference), cls)
+
     def test_coefficients_reproduce_model_with_products_and_training_transforms(self):
         rng = np.random.default_rng(42)
         blocks = [rng.normal(size=(12, 4)), rng.normal(size=(12, 3))]

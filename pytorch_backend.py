@@ -9,10 +9,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from kernels import distance_spec_for_kernel
 from kernel_cache import (
     DistanceCache,
     FoldDistanceCache,
-    distance_spec_for_kernel,
     inverse_transform_target,
     score_predictions,
 )

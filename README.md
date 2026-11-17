@@ -1,14 +1,25 @@
 # Composite Kernel Ridge Regression
 
-Python package for implementing Kernel Ridge Regression with multiple kernels.
-- Parallel: CPU parallel via joblib, and GPU parallel via PyTorch tensor operations.
-- Easy config
-- Very tunable learning
-- Supports K-Fold CV and target-stratification
-- Easy to add multiple descriptors and kernels
-- Multi-target learning with shared-kernel KRR/CKRR.
-- Config validation
-- Centered kernel–kernel and kernel–target alignment diagnostics for fitted base and product kernels.
+Fit exact or Nyström kernel ridge regression to one or more targets using
+descriptor-specific kernels and optional kernel products. Start a configured run
+with `main.py --config <path>`. The [configuration guide](#json-configuration-and-cli)
+describes splits, preprocessing, search and output.
+
+## Where to edit the code
+
+| Task | Implementation |
+|---|---|
+| Change config validation or start a run | [Schema](config_schema.py), [CLI](krr_cli.py), [workflow](runner.py) |
+| Fit or predict with fixed parameters | [Exact estimator](composite_krr/estimators/exact.py), [Nyström estimator](composite_krr/estimators/nystrom.py) |
+| Change exact kernel assembly or solves | [NumPy](class_CompositeKRR.py), [PyTorch](torch_exact_krr.py) |
+| Change how estimators and CV interpret descriptor blocks and parameters | [Estimator inputs](composite_krr/estimator_inputs.py), [kernel products and weights](kernel_mixing.py) |
+| Tune parameters or score candidates across folds | [Staged search](search_random.py), [Bayesian search](search_bayes.py), [cached scoring](cached_scoring.py) |
+| Read stored blocks, apply transforms or restore a fitted model | [Descriptor storage](descriptor_storage.py), [preprocessing](preprocess.py), [saved models](saved_model.py) |
+
+When using the engine from a checkout, import `CompositeKRREstimator` or
+`CompositeNystromKRREstimator` from `composite_krr.estimators`. The older
+`search_random` and `nystrom_krr` class paths also resolve for existing callers
+and serialized models.
 
 ## Search controls and evidence
 

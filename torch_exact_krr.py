@@ -6,7 +6,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from class_CompositeKRR import KernelComponent
-from kernel_cache import distance_spec_for_kernel
+from kernels import distance_spec_for_kernel
 from kernel_mixing import mix_kernel_terms, resolve_kernel_products, validate_kernel_parameters
 from target_utils import as_target_array, as_target_matrix, maybe_squeeze_single_target
 

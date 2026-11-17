@@ -6,13 +6,13 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from sklearn.base import clone
 from threadpoolctl import threadpool_limits
+from composite_krr.estimator_inputs import normalize_compute_backend, resolve_kernel_hyperparameters
 from kernel_mixing import resolve_kernel_products
 
 from kernel_cache import (
     DistanceCache,
     extract_regressor,
     resolve_cache_n_jobs,
-    resolve_kernel_hyperparameters,
     score_fold_from_distances,
 )
 from nystrom_cache import (
@@ -341,15 +341,7 @@ def score_candidates_from_cache(
 
 
 def normalize_cached_scoring_backend(backend: str) -> str:
-    backend = str(backend).lower()
-    if backend in {"numpy", "np", "cpu"}:
-        return "numpy"
-    if backend in {"pytorch", "torch", "gpu", "cuda", "rocm"}:
-        return "pytorch"
-    raise ValueError(
-        'cached scoring backend must be "numpy" or "pytorch", '
-        f"got {backend!r}."
-    )
+    return normalize_compute_backend(backend, name="cached scoring backend")
 
 
 def _validate_candidate_arrays(
