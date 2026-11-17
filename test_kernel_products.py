@@ -247,6 +247,20 @@ class ProductKernelTests(unittest.TestCase):
                     saved = json.loads((work / backend / "resolved_config.json").read_text())
                     self.assertEqual(saved["kernel_products"], [["a", "b"]])
 
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional")
+    def test_cuda_laplacian_slab_tail_matches_dense(self):
+        import torch
+        from pytorch_backend import pairwise_self_lp_distance_pytorch
+
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA required for tiled self distances")
+        generator = torch.Generator().manual_seed(12)
+        x = torch.randn(515, 14, dtype=torch.float64, generator=generator).cuda()[:, ::2]
+        x[1] = x[0]
+        dense = torch.cdist(x, x, p=1)
+        tiled = pairwise_self_lp_distance_pytorch(x, p=1, device=x.device, dtype=x.dtype)
+        torch.testing.assert_close(tiled, dense, rtol=0, atol=0)
+
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional and is not installed")
     def test_host_distance_blocks_keep_batched_product_scores(self):
         import torch
