@@ -649,7 +649,11 @@ def _gamma_centers_from_distance_cache(
     for component_index, legal_bounds in enumerate(legal_gamma_bounds):
         medians = []
         for fold in distance_cache.folds:
-            median = _positive_finite_median(fold.train_distances[component_index])
+            distance = fold.train_distances[component_index]
+            # A Torch scoring fold knows the compute device even when its
+            # distances live in host RAM. Only the sampled values need moving.
+            device = getattr(getattr(fold, "y_validation_torch", None), "device", None)
+            median = _positive_finite_median(distance, device=device)
             if np.isfinite(median) and median > 0:
                 medians.append(median)
         centers.append(_gamma_center_from_distance_medians(medians, legal_bounds))
@@ -756,9 +760,9 @@ def _gamma_center_from_distance_medians(
     return float(np.clip(center, legal_bounds[0], legal_bounds[1]))
 
 
-def _positive_finite_median(values, *, max_values: int = 2_000_000) -> float:
+def _positive_finite_median(values, *, max_values: int = 2_000_000, device=None) -> float:
     if _is_torch_tensor(values):
-        return _positive_finite_median_torch(values, max_values=max_values)
+        return _positive_finite_median_torch(values, max_values=max_values, device=device)
 
     values = np.asarray(values).ravel()
     if values.size == 0:
@@ -773,7 +777,7 @@ def _positive_finite_median(values, *, max_values: int = 2_000_000) -> float:
     return float(np.median(sample))
 
 
-def _positive_finite_median_torch(values, *, max_values: int) -> float:
+def _positive_finite_median_torch(values, *, max_values: int, device=None) -> float:
     from importlib import import_module
 
     torch = import_module("torch")
@@ -783,6 +787,8 @@ def _positive_finite_median_torch(values, *, max_values: int) -> float:
 
     step = max(1, int(np.ceil(values.numel() / max_values)))
     sample = values[::step]
+    if device is not None:
+        sample = sample.to(device)
     sample = sample[torch.isfinite(sample) & (sample > 0)]
     if sample.numel() == 0:
         return np.nan
@@ -1151,7 +1157,7 @@ def staged_random_search_cv(
             n_components=n_components,
             legal_gamma_bounds=component_gamma_bounds,
             decades=gamma_prior_decades,
-            distance_cache=distance_cache,
+            distance_cache=scoring_distance_cache if distance_cache_storage == "host" else distance_cache,
             dtype=distance_dtype,
             block_size=distance_block_size,
             max_samples=gamma_prior_max_samples,
