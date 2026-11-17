@@ -409,6 +409,16 @@ def composite_kernel_from_distances_pytorch(
         if distance.shape != first_distance.shape:
             raise ValueError("All distance matrices must have the same shape.")
         distance_spec_for_kernel(kernel_type)
+    if not products and not torch.is_grad_enabled():
+        # Additive inference can reuse one temporary for all component kernels.
+        out = (-gammas[:, 0, None, None] * first_distance).exp_()
+        out.mul_(weights[:, 0, None, None])
+        if len(distances) > 1:
+            term = torch.empty_like(out)
+            for i, distance in enumerate(distances[1:], start=1):
+                torch.mul(-gammas[:, i, None, None], distance, out=term)
+                out.addcmul_(term.exp_(), weights[:, i, None, None])
+        return out[0] if single_candidate else out
     out = mix_kernel_terms(
         (torch.exp(-gammas[:, i, None, None] * distance.unsqueeze(0))
          for i, distance in enumerate(distances)),
@@ -742,8 +752,7 @@ def _predict_batch_from_torch_fold(
         kernel_types=kernel_types,
         kernel_products=kernel_products,
     )
-    diag = torch.arange(K_train.shape[1], device=K_train.device)
-    K_train[:, diag, diag] = K_train[:, diag, diag] + alphas_t[:, None]
+    K_train.diagonal(dim1=-2, dim2=-1).add_(alphas_t[:, None])
 
     y_train = fold.y_train_transformed
     if y_train.ndim == 1:
