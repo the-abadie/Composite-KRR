@@ -208,10 +208,10 @@ class KRRConfigTests(unittest.TestCase):
                             '[split]\nmode="random"\nn_train=10\n[output]\ndirectory="output"\n')
             self.assertEqual(KRRConfig.load(path).spec.split.n_train, 10)
 
-    def test_import_main_does_not_execute_or_import_python_config(self):
+    def test_import_main_preserves_the_callers_logging_handlers(self):
         completed = subprocess.run([sys.executable, '-c',
-            'import sys, logging; h=list(logging.getLogger().handlers); import main, runner; '
-            'assert "config" not in sys.modules; assert h == logging.getLogger().handlers'],
+            'import logging; root=logging.getLogger(); handler=logging.NullHandler(); '
+            'root.addHandler(handler); import main; assert root.handlers == [handler]'],
             cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 

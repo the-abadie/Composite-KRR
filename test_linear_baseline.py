@@ -14,7 +14,7 @@ from cached_scoring import score_estimator_params_from_cache
 from config_schema import RunConfig
 from kernel_cache import build_distance_cache
 from run_config import template
-from search_random import CompositeKRREstimator, _maybe_build_distance_cache
+from search_random import CompositeKRREstimator, staged_random_search_cv
 
 
 class LinearBaselineTests(unittest.TestCase):
@@ -75,10 +75,19 @@ class LinearBaselineTests(unittest.TestCase):
         np.testing.assert_array_equal(cache.folds[0].y_train_transformed, changed_cache.folds[0].y_train_transformed)
         np.testing.assert_array_equal(cache.folds[0].baseline_validation, changed_cache.folds[0].baseline_validation)
 
-    def test_search_cache_receives_baseline(self):
-        cache = _maybe_build_distance_cache(self.estimator(), self.X, self.y, self.cv,
-                   n_components=2, block_size=16, dtype="float64", n_jobs=1, memory_fraction=.8)
-        self.assertIsNotNone(cache.folds[0].baseline_validation)
+    def test_cached_search_scores_include_the_fitted_baseline(self):
+        estimator = self.estimator()
+        scoring = "neg_mean_absolute_error"
+        result = staged_random_search_cv(
+            estimator, self.X, self.y, n_components=2,
+            alpha_bounds=(0.01, 1), gamma_bounds=(0.02, 1),
+            n_iter_stage1=2, n_iter_stage2=2, n_iter_stage3=0,
+            scoring=scoring, cv=self.cv, n_jobs=1, random_state=2,
+            use_distance_cache=True, distance_cache_n_jobs=1, prefix="regressor__",
+        )
+        selected_estimator = clone(estimator).set_params(**result.best_params_)
+        expected = cross_val_score(selected_estimator, self.X, self.y, cv=self.cv, scoring=scoring)
+        self.assertAlmostEqual(result.best_score_, expected.mean())
 
     def test_cached_candidates_cannot_change_the_fitted_baseline(self):
         with self.assertRaises(ValueError):

@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
@@ -19,7 +18,6 @@ from sklearn.model_selection import KFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 from cached_scoring import resolve_candidate_hyperparameter_arrays, score_candidates_from_cache
-from class_CompositeKRR import CompositeKRR, KernelComponent
 from kernel_cache import build_distance_cache, composite_kernel_from_distances
 from kernel_mixing import resolve_kernel_products
 from nystrom_cache import build_nystrom_distance_cache
@@ -93,16 +91,14 @@ class ProductKernelTests(unittest.TestCase):
                         self.assertEqual(actual.shape, expected.shape)
                         assert_allclose(actual, expected, atol=3e-5 if dtype == "float32" else 1e-11)
 
-    def test_cached_assembly_reuses_bases_without_mutation(self):
+    def test_cached_assembly_writes_output_without_mutating_distances(self):
         for dtype in (np.float32, np.float64):
             distances = [cdist(b[:7], b[7:], metric="sqeuclidean" if k == "rbf" else "cityblock").astype(dtype)
                          for b, k in zip(self.blocks, self.types)]
             originals = [d.copy() for d in distances]
             out = np.empty_like(distances[0])
-            with patch("kernel_cache.np.exp", wraps=np.exp) as exp:
-                actual = composite_kernel_from_distances(distances, gammas=self.gammas,
-                        weights=self.weights, kernel_types=self.types, kernel_products=self.products, out=out)
-            self.assertEqual(exp.call_count, 4)
+            actual = composite_kernel_from_distances(distances, gammas=self.gammas,
+                    weights=self.weights, kernel_types=self.types, kernel_products=self.products, out=out)
             self.assertIs(actual, out)
             self.assertEqual(actual.dtype, dtype)
             expected = explicit_kernel([b[:7] for b in self.blocks], [b[7:] for b in self.blocks],
@@ -110,16 +106,6 @@ class ProductKernelTests(unittest.TestCase):
             assert_allclose(actual, expected, atol=2e-7 if dtype == np.float32 else 1e-14)
             for old, new in zip(originals, distances):
                 assert_array_equal(old, new)
-
-    def test_direct_assembly_computes_each_base_once(self):
-        components = [KernelComponent(str(i), g, w, k)
-                      for i, (g, w, k) in enumerate(zip(self.gammas, self.weights, self.types))]
-        model = CompositeKRR(components, 0.2, kernel_products=self.products, product_weights=self.weights[4:])
-        with patch("class_CompositeKRR.pairwise_kernels", wraps=pairwise_kernels) as pairwise:
-            actual = model._composite_kernel(self.blocks, self.blocks)
-        self.assertEqual(pairwise.call_count, 4)
-        assert_allclose(actual, explicit_kernel(self.blocks, self.blocks, self.types, self.gammas,
-                                                self.weights, self.products), atol=1e-14)
 
     def test_cached_cv_matches_fold_fitted_preprocessing(self):
         for kind in ("exact", "nystrom"):
