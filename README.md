@@ -14,7 +14,7 @@ describes splits, preprocessing, search and output.
 | Change exact kernel assembly or solves | [NumPy](class_CompositeKRR.py), [PyTorch](torch_exact_krr.py) |
 | Change Torch device selection, dtype handling or pairwise distances | [Torch runtime](composite_krr/torch_runtime.py), [Torch distances](composite_krr/torch_distances.py) |
 | Change how estimators and CV interpret descriptor blocks and parameters | [Estimator inputs](composite_krr/estimator_inputs.py), [kernel products and weights](kernel_mixing.py) |
-| Tune parameters or score candidates across folds | [Staged search](search_random.py), [Bayesian search](search_bayes.py), [cached scoring](cached_scoring.py), [batched Torch scoring](pytorch_backend.py) |
+| Tune parameters or score candidates across folds | [Staged search](search_random.py), [bandwidth estimation](composite_krr/bandwidth.py), [Bayesian search](search_bayes.py), [cached scoring](cached_scoring.py), [batched Torch scoring](pytorch_backend.py) |
 | Read stored blocks, apply transforms or restore a fitted model | [Descriptor storage](descriptor_storage.py), [preprocessing](preprocess.py), [saved models](saved_model.py) |
 
 When using the engine from a checkout, import `CompositeKRREstimator` or
